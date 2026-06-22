@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PLC Review Assistant</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Read-only static analysis</p>
+        <h1>PLC Review Assistant</h1>
+      </div>
+      <div class="safety-strip" aria-label="Safety scope">
+        <span>읽기 전용</span>
+        <span>보호 블록 우회 없음</span>
+        <span>PLC 접속 없음</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="upload-panel" aria-labelledby="upload-title">
+        <div class="section-heading">
+          <h2 id="upload-title">프로젝트 업로드</h2>
+          <span id="server-status" class="status-pill">확인 중</span>
+        </div>
+
+        <form id="analysis-form" class="analysis-form">
+          <fieldset class="version-selector">
+            <legend>제품 버전</legend>
+            <label class="version-card">
+              <input type="radio" name="assistant-version" value="mitsubishi" checked />
+              <span>
+                <strong>Mitsubishi</strong>
+                <small>GX Works CSV/TXT 분석 및 회로수정 후보</small>
+              </span>
+            </label>
+            <label class="version-card">
+              <input type="radio" name="assistant-version" value="siemens" />
+              <span>
+                <strong>Siemens PLC</strong>
+                <small>TIA XML/SCL 분석 및 회로수정 후보</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <label class="file-drop" for="project-file">
+            <input id="project-file" name="project-file" type="file" accept=".xml,.csv,.txt,.lst,.asc" />
+            <span class="file-icon" aria-hidden="true">PLC</span>
+            <strong id="file-name">XML, CSV, TXT export 파일</strong>
+            <small id="file-meta">Siemens TIA XML 또는 Mitsubishi CSV/TXT</small>
+          </label>
+
+          <fieldset class="vendor-selector">
+            <legend>벤더</legend>
+            <label><input type="radio" name="vendor" value="auto" checked /> Auto</label>
+            <label><input type="radio" name="vendor" value="siemens" /> Siemens</label>
+            <label><input type="radio" name="vendor" value="mitsubishi" /> Mitsubishi</label>
+          </fieldset>
+
+          <button id="analyze-button" class="primary-action" type="submit" disabled>분석 시작</button>
+        </form>
+
+        <div id="message" class="message" role="status"></div>
+
+        <section class="change-request-box" aria-labelledby="change-request-title">
+          <h2 id="change-request-title">회로수정 요청</h2>
+          <textarea
+            id="change-request"
+            rows="7"
+            placeholder="예: 제품 감지 센서가 ON 되고 스타트 조건이 살아 있으면 컨베이어 모터를 바로 켜지 말고 3초 후 켜지게 해주세요. 정지 버튼과 비상정지는 기존처럼 우선 적용합니다."
+          ></textarea>
+          <button id="change-button" class="secondary-action" type="button" disabled>수정 후보 생성</button>
+        </section>
+      </section>
+
+      <section class="results-panel" aria-labelledby="results-title">
+        <div class="section-heading">
+          <h2 id="results-title">분석 결과</h2>
+          <div class="report-actions">
+            <button class="icon-button" type="button" data-report="markdown" disabled title="Markdown 다운로드">MD</button>
+            <button class="icon-button" type="button" data-report="excel" disabled title="Excel 다운로드">XLS</button>
+            <button class="icon-button" type="button" data-report="pdf" disabled title="PDF 다운로드">PDF</button>
+          </div>
+        </div>
+
+        <div id="empty-state" class="empty-state">
+          <div class="logic-preview" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <p>분석 결과가 여기에 표시됩니다.</p>
+        </div>
+
+        <div id="analysis-view" class="analysis-view hidden">
+          <section class="summary-grid" aria-label="Summary metrics">
+            <div>
+              <span>블록</span>
+              <strong id="metric-blocks">0</strong>
+            </div>
+            <div>
+              <span>태그/변수</span>
+              <strong id="metric-variables">0</strong>
+            </div>
+            <div>
+              <span>I/O 주소</span>
+              <strong id="metric-io">0</strong>
+            </div>
+            <div>
+              <span>이슈 후보</span>
+              <strong id="metric-findings">0</strong>
+            </div>
+          </section>
+
+          <section class="assistant-summary" aria-labelledby="assistant-title">
+            <h3 id="assistant-title">AI 요약</h3>
+            <pre id="assistant-summary"></pre>
+          </section>
+
+          <nav class="tabs" aria-label="Result tabs">
+            <button class="tab active" type="button" data-tab="findings">발견 항목</button>
+            <button class="tab" type="button" data-tab="change">회로수정</button>
+            <button class="tab" type="button" data-tab="blocks">블록</button>
+            <button class="tab" type="button" data-tab="variables">태그/I/O</button>
+            <button class="tab" type="button" data-tab="limits">한계</button>
+          </nav>
+
+          <section id="tab-findings" class="tab-panel"></section>
+          <section id="tab-change" class="tab-panel hidden"></section>
+          <section id="tab-blocks" class="tab-panel hidden"></section>
+          <section id="tab-variables" class="tab-panel hidden"></section>
+          <section id="tab-limits" class="tab-panel hidden"></section>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

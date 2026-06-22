@@ -1,0 +1,11 @@
+{
+  "name": "plc-review-assistant",
+  "version": "1.0.0",
+  "description": "Read-only PLC code review and documentation assistant",
+  "type": "module",
+  "scripts": {
+    "start": "node src/backend/server.js",
+    "dev": "node src/backend/server.js",
+    "test": "node --test tests/*.test.js"
+  }
+}

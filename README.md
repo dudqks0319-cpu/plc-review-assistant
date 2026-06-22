@@ -1,0 +1,143 @@
+# PLC Review Assistant
+
+Read-only PLC code review, documentation, and change-assistant tool for vendor export files.
+
+## Scope
+
+This MVP analyzes exported project data, not live PLCs and not protected project archives.
+
+Supported inputs:
+
+- Siemens TIA Portal XML exports
+- Siemens PLC block/tag XML exports
+- Mitsubishi GX Developer/GX Works CSV label exports
+- Mitsubishi project listing TXT/LST exports
+
+Two product versions are exposed in the app:
+
+- **Mitsubishi 분석 및 회로수정**: GX Works CSV/TXT analysis, ladder listing patch candidates, GX Works3 simulator scenario candidates
+- **Siemens PLC 분석 및 회로수정**: TIA XML/SCL analysis, SCL/SimaticML patch candidates, S7-PLCSIM Advanced scenario candidates
+
+Explicitly out of scope:
+
+- Direct parsing of `.zap20`, `.gx3`, or other original project containers
+- Password removal, protected-block bypass, or encrypted-block interpretation
+- Online PLC connection
+- PLC writes, downloads, or automatic logic modification
+- Safety certification or field commissioning replacement
+
+## What It Does
+
+- Detects supported file type from filename and content
+- Normalizes exported PLC data into projects, blocks, variables, I/O addresses, and call edges
+- Flags static review candidates:
+  - duplicate I/O address usage
+  - missing block/tag comments
+  - weak unused-tag candidates
+  - naming-rule violations
+  - repeated Set/Reset target candidates
+  - protected content markers
+- Generates a Korean AI-style review summary from deterministic analysis data
+- Converts a natural-language change request into a structured change plan
+- Finds target output, start conditions, stop/interlock candidates, and likely affected blocks
+- Generates vendor-specific patch candidates:
+  - Siemens SCL and SimaticML notes
+  - Mitsubishi ladder listing and CSV rows
+- Generates downloadable candidate files from the Codex app server:
+  - modified candidate program text/export
+  - vendor patch candidate
+  - unified diff
+  - change-plan JSON
+- Runs a built-in static timer/stop-priority harness for expected-output checks
+- Downloads Markdown, Excel-compatible XML, and PDF reports
+
+## Run
+
+```bash
+npm install
+npm start
+```
+
+Open:
+
+```text
+http://localhost:4173
+```
+
+## Test
+
+```bash
+npm test
+```
+
+## API
+
+Create an analysis:
+
+```http
+POST /api/v1/analyses
+Content-Type: application/json
+
+{
+  "filename": "project.xml",
+  "vendor": "auto",
+  "content": "<Document>...</Document>"
+}
+```
+
+Create a report:
+
+```http
+POST /api/v1/reports
+Content-Type: application/json
+
+{
+  "format": "markdown",
+  "analysis": { "...": "analysis response data" }
+}
+```
+
+Supported report formats are `markdown`, `excel`, and `pdf`.
+
+Create a circuit-change plan:
+
+```http
+POST /api/v1/change-plans
+Content-Type: application/json
+
+{
+  "vendor": "siemens",
+  "requestText": "제품 감지 후 컨베이어 모터를 3초 뒤 켜고 정지 조건은 우선 적용",
+  "sourceFilename": "project.xml",
+  "sourceContent": "<Document>...</Document>",
+  "analysis": { "...": "analysis response data" }
+}
+```
+
+The response includes:
+
+- normalized requirement
+- affected elements
+- candidate modification locations
+- before/after diff
+- expected behavior
+- test cases
+- built-in harness result
+- vendor-specific patch candidates
+- downloadable candidate files
+- required approvals and warnings
+
+## Security Notes
+
+- Uploaded content is analyzed in memory and is not written to disk by the app.
+- Candidate modified files are generated in the server response and downloaded by the browser; the app does not overwrite the original uploaded file.
+- No secrets are required.
+- No LLM training or external model call is performed in this local MVP.
+- Protected or password-related markers are reported as excluded items, not bypassed.
+- Unsafe requests that bypass, remove, or ignore emergency/safety logic are blocked before patch generation.
+
+## Accuracy Notes
+
+PLC logic is context-dependent. Static analysis can highlight review candidates, but it cannot prove live equipment behavior. HMI references, drives, field wiring, scan-cycle timing, and safety validation must be checked through the owner’s normal engineering process.
+
+The built-in harness is intentionally small. It validates timer delay and stop-priority expectations for the generated candidate, then produces vendor-simulator scenarios for qualified engineers to run in TIA Portal/S7-PLCSIM Advanced or GX Works3 Simulator.
