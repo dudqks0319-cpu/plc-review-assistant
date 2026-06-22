@@ -1,0 +1,6 @@
+Label,Device,Data Type,Comment,Program
+ProductSensor,X10,BIT,Product sensor,MAIN
+StartEnable,M100,BIT,Start enable,MAIN
+StopButton,X11,BIT,Stop button,MAIN
+EmergencyStop,X12,BIT,Emergency stop,MAIN
+ConveyorMotor,Y20,BIT,Conveyor motor,MAIN

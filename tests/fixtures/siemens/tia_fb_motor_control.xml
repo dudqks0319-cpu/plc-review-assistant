@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Document>
+  <SW.Blocks.FB Name="ConveyorControl" ProgrammingLanguage="LAD" Comment="Conveyor motor sequence">
+    <Member Name="Product_Detected" Datatype="Bool" Address="%I0.4" Comment="Product detect sensor" />
+    <Member Name="Start_Enable" Datatype="Bool" Address="%M100.0" Comment="Auto start enable" />
+    <Member Name="Stop_Button" Datatype="Bool" Address="%I0.5" Comment="Stop pushbutton" />
+    <Member Name="Emergency_Stop" Datatype="Bool" Address="%I0.6" Comment="Emergency stop input" />
+    <Member Name="Conveyor_Motor" Datatype="Bool" Address="%Q0.2" Comment="Conveyor motor output" />
+    <Network>
+      SET %Q0.2
+      R %Q0.2
+    </Network>
+  </SW.Blocks.FB>
+  <SW.Blocks.FC Name="ConveyorInterlock" ProgrammingLanguage="SCL" Comment="Interlock checks" />
+</Document>

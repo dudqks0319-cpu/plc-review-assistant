@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   analyzePlcProject,
@@ -27,7 +28,10 @@ StartSwitch,X0,BIT,Start switch,MAIN
 StartAlias,X0,BIT,,MAIN
 RunCoil,Y10,BIT,Motor run,MAIN
 UnusedFlag,M10,BIT,,MAIN
-Bad Name,D20,INT,,MAIN`;
+Bad Name,D20,INT,,MAIN
+ExistingTimer,T200,TIMER,Timer already used,MAIN`;
+
+const siemensFixture = readFileSync(new URL('./fixtures/siemens/tia_fb_motor_control.xml', import.meta.url), 'utf8');
 
 test('analyzePlcProject parses Siemens TIA XML exports into normalized review data', () => {
   const analysis = analyzePlcProject({
@@ -55,10 +59,22 @@ test('analyzePlcProject parses Mitsubishi CSV exports and detects review candida
 
   assert.equal(analysis.project.vendor, 'mitsubishi');
   assert.equal(analysis.project.source.fileType, 'mitsubishi-csv');
-  assert.equal(analysis.summary.variableCount, 5);
+  assert.equal(analysis.summary.variableCount, 6);
+  assert.equal(analysis.project.ioAddresses.some((item) => item.address === 'T200'), true);
   assert.equal(analysis.project.blocks.some((block) => block.name === 'MAIN'), true);
   assert.equal(analysis.findings.some((finding) => finding.category === 'duplicate-address' && finding.title.includes('X0')), true);
   assert.equal(analysis.findings.some((finding) => finding.category === 'naming'), true);
+});
+
+test('fixture Siemens export remains parseable', () => {
+  const analysis = analyzePlcProject({
+    filename: 'tia_fb_motor_control.xml',
+    vendor: 'siemens',
+    content: siemensFixture
+  });
+
+  assert.equal(analysis.summary.blockCount, 2);
+  assert.equal(analysis.project.variables.some((variable) => variable.name === 'Conveyor_Motor'), true);
 });
 
 test('report generators create Markdown, Excel-compatible XML, and PDF outputs', () => {

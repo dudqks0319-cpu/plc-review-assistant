@@ -186,7 +186,11 @@ function renderChangePlan(changePlan) {
   meta.append(createElement('span', '', changePlan.title));
   meta.append(createElement('span', `risk-${changePlan.riskLevel}`, `위험도 ${changePlan.riskLevel}`));
   meta.append(createElement('span', '', `하네스 ${changePlan.simulation.result}`));
+  meta.append(createElement('span', '', `요구사항 ${changePlan.requirementNormalization?.source || 'deterministic-rules'}`));
   summary.append(meta);
+  if (changePlan.requirementNormalization?.fallbackReason) {
+    summary.append(createElement('p', 'muted-line', `Codex 정규화 fallback: ${changePlan.requirementNormalization.fallbackReason}`));
+  }
   summary.append(createElement('h4', '', '수정 전/후'));
   const diffList = createElement('ul', 'limit-list');
   changePlan.beforeAfterDiff.forEach((item) => {

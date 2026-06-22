@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 
 const SUPPORTED_XML_BLOCK_TYPES = new Set(['FB', 'FC', 'OB', 'DB', 'UDT']);
 const SIEMENS_IO_PATTERN = /%?\b(?:I|Q|M)(?:B|W|D)?\d+(?:\.\d+)?\b|%?\bDB\d+\.DB(?:X|B|W|D)\d+(?:\.\d+)?\b/gi;
-const MITSUBISHI_DEVICE_PATTERN = /\b(?:X|Y|M|L|B|D|W|R|ZR|SD|SM)\d+[A-F0-9]*(?:\.\d+)?\b/gi;
-const SET_RESET_PATTERN = /\b(?:SET|RST|S|R)\s+(%?(?:I|Q|M)(?:B|W|D)?\d+(?:\.\d+)?|(?:X|Y|M|L|B|D|W|R|ZR|SD|SM)\d+[A-F0-9]*(?:\.\d+)?)\b/gi;
+const MITSUBISHI_DEVICE_PATTERN = /\b(?:X|Y|M|L|B|D|W|R|ZR|T|C|SD|SM)\d+[A-F0-9]*(?:\.\d+)?\b/gi;
+const SET_RESET_PATTERN = /\b(?:SET|RST|S|R)\s+(%?(?:I|Q|M)(?:B|W|D)?\d+(?:\.\d+)?|(?:X|Y|M|L|B|D|W|R|ZR|T|C|SD|SM)\d+[A-F0-9]*(?:\.\d+)?)\b/gi;
 const PROTECTED_PATTERN = /\b(?:know[-\s]?how\s+protected|password\s+protected|encrypted|protected\s+block|read\s+protected)\b/i;
 const MAX_SAMPLE_ITEMS = 8;
 
@@ -73,6 +73,10 @@ function addressDirection(address = '') {
 
   if (normalized.startsWith('SM') || normalized.startsWith('SD')) {
     return 'special';
+  }
+
+  if (normalized.startsWith('T') || normalized.startsWith('C')) {
+    return 'internal';
   }
 
   return 'unknown';

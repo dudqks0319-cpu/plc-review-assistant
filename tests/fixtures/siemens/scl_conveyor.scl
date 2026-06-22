@@ -1,0 +1,2 @@
+// Candidate SCL source fixture used by tests.
+Conveyor_Motor := Product_Detected AND Start_Enable AND NOT Stop_Button AND NOT Emergency_Stop;

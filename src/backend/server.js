@@ -9,6 +9,7 @@ import {
   createPdfReport
 } from './plcAnalyzer.js';
 import { createChangePlan, VENDOR_PROFILES } from './plcChangeAssistant.js';
+import { normalizeChangeRequirement } from './requirementNormalizer.js';
 
 const PUBLIC_DIR = join(process.cwd(), 'public');
 const MAX_JSON_BYTES = 6_000_000;
@@ -186,6 +187,10 @@ function validateChangePlanPayload(body) {
   };
 }
 
+function isCodexNormalizerEnabled() {
+  return ['1', 'true', 'app-server', 'on'].includes(String(process.env.PLC_CODEX_REQUIREMENT_NORMALIZER || '').toLowerCase());
+}
+
 async function handleCreateAnalysis(req, res) {
   if (req.method !== 'POST') {
     methodNotAllowed(res);
@@ -236,9 +241,29 @@ async function handleCreateChangePlan(req, res) {
 
   const body = await parseJsonBody(req);
   const payload = validateChangePlanPayload(body);
-  const changePlan = createChangePlan(payload);
+  const normalization = await normalizeChangeRequirement(payload);
+  const changePlan = createChangePlan({
+    ...payload,
+    normalizedRequirementInput: normalization.requirement,
+    safetyValidation: normalization.validation,
+    normalizationSource: normalization.source,
+    fallbackReason: normalization.fallbackReason
+  });
 
   sendJson(res, 201, { data: changePlan });
+}
+
+async function handleNormalizeCodexRequirement(req, res) {
+  if (req.method !== 'POST') {
+    methodNotAllowed(res);
+    return;
+  }
+
+  const body = await parseJsonBody(req);
+  const payload = validateChangePlanPayload(body);
+  const normalization = await normalizeChangeRequirement(payload);
+
+  sendJson(res, 200, { data: normalization });
 }
 
 export function createServer() {
@@ -264,6 +289,7 @@ export function createServer() {
               simulator: profile.simulator
             })),
             supportedInputs: ['Siemens TIA XML', 'Mitsubishi CSV', 'Mitsubishi TXT'],
+            codexRequirementNormalizer: isCodexNormalizerEnabled() ? 'app-server' : 'deterministic-fallback',
             writesToPlc: false,
             bypassesProtectedBlocks: false
           }
@@ -283,6 +309,11 @@ export function createServer() {
 
       if (url.pathname === '/api/v1/change-plans') {
         await handleCreateChangePlan(req, res);
+        return;
+      }
+
+      if (url.pathname === '/api/v1/codex/change-requirements') {
+        await handleNormalizeCodexRequirement(req, res);
         return;
       }
 

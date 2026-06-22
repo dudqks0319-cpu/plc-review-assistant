@@ -58,6 +58,7 @@ test('GET /api/health exposes read-only product scope', async () => {
   assert.equal(body.data.product, 'PLC Review Assistant');
   assert.equal(body.data.versions.some((version) => version.id === 'siemens-plc-change-assistant'), true);
   assert.equal(body.data.versions.some((version) => version.id === 'mitsubishi-change-assistant'), true);
+  assert.equal(body.data.codexRequirementNormalizer, 'deterministic-fallback');
   assert.equal(body.data.writesToPlc, false);
   assert.equal(body.data.bypassesProtectedBlocks, false);
 });
@@ -136,4 +137,29 @@ test('POST /api/v1/reports returns markdown, excel, and pdf downloads', async ()
   assert.equal(pdf.headers.get('Content-Type'), 'application/pdf');
   const pdfBytes = Buffer.from(await pdf.arrayBuffer());
   assert.equal(pdfBytes.subarray(0, 5).toString('utf8'), '%PDF-');
+});
+
+test('POST /api/v1/codex/change-requirements falls back when Codex normalizer is disabled', async () => {
+  const analysisResponse = await requestJson('/api/v1/analyses', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: 'pump.xml',
+      vendor: 'siemens',
+      content: sampleXml
+    })
+  });
+
+  const { response, body } = await requestJson('/api/v1/codex/change-requirements', {
+    method: 'POST',
+    body: JSON.stringify({
+      analysis: analysisResponse.body.data,
+      vendor: 'siemens',
+      requestText: 'PumpRun을 3초 뒤 켜고 정지 조건은 우선 적용'
+    })
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(body.data.source, 'deterministic-fallback');
+  assert.equal(body.data.requirement.delaySeconds, 3);
+  assert.equal(body.data.validation.ok, true);
 });

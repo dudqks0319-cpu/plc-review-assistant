@@ -37,7 +37,8 @@ Explicitly out of scope:
   - naming-rule violations
   - repeated Set/Reset target candidates
   - protected content markers
-- Generates a Korean AI-style review summary from deterministic analysis data
+- Generates a Korean rule-based review summary from deterministic analysis data
+- Optionally uses server-side Codex app-server normalization for ambiguous natural-language change requests
 - Converts a natural-language change request into a structured change plan
 - Finds target output, start conditions, stop/interlock candidates, and likely affected blocks
 - Generates vendor-specific patch candidates:
@@ -99,6 +100,21 @@ Content-Type: application/json
 
 Supported report formats are `markdown`, `excel`, and `pdf`.
 
+Normalize a natural-language change request:
+
+```http
+POST /api/v1/codex/change-requirements
+Content-Type: application/json
+
+{
+  "vendor": "siemens",
+  "requestText": "제품 감지 후 컨베이어 모터를 3초 뒤 켜고 정지 조건은 우선 적용",
+  "analysis": { "...": "analysis response data" }
+}
+```
+
+By default this endpoint returns a deterministic fallback result. Set `PLC_CODEX_REQUIREMENT_NORMALIZER=app-server` on the server to let the backend try `codex app-server` first. Codex output is treated only as a requirement-normalization hint and is always passed through deterministic safety validation before patch candidates are generated.
+
 Create a circuit-change plan:
 
 ```http
@@ -131,10 +147,29 @@ The response includes:
 
 - Uploaded content is analyzed in memory and is not written to disk by the app.
 - Candidate modified files are generated in the server response and downloaded by the browser; the app does not overwrite the original uploaded file.
-- No secrets are required.
-- No LLM training or external model call is performed in this local MVP.
+- No secrets are required for the default deterministic MVP.
+- If Codex app-server normalization is enabled, Codex credentials must stay server-side through environment variables or Codex local auth. Browser JavaScript never receives Codex tokens.
+- No LLM training or external model call is performed unless the optional server-side Codex normalizer is explicitly enabled.
 - Protected or password-related markers are reported as excluded items, not bypassed.
 - Unsafe requests that bypass, remove, or ignore emergency/safety logic are blocked before patch generation.
+
+## Optional Codex Normalizer
+
+Create a local `.env` from `.env.example` or set environment variables directly:
+
+```bash
+export PLC_CODEX_REQUIREMENT_NORMALIZER=app-server
+export PLC_CODEX_BIN=codex
+export PLC_CODEX_TIMEOUT_MS=20000
+```
+
+Use a Codex access token only on trusted server-side runners:
+
+```bash
+export CODEX_ACCESS_TOKEN="..."
+```
+
+The app does not require the Codex normalizer to run. If Codex is unavailable, times out, or returns invalid JSON, `/api/v1/change-plans` continues with deterministic fallback parsing.
 
 ## Accuracy Notes
 

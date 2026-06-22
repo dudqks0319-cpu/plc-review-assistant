@@ -1,25 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { analyzePlcProject } from '../src/backend/plcAnalyzer.js';
 import { createChangePlan } from '../src/backend/plcChangeAssistant.js';
 
-const siemensXml = `<?xml version="1.0"?>
-<Document>
-  <SW.Blocks.FB Name="ConveyorControl" ProgrammingLanguage="LAD" Comment="Conveyor motor logic">
-    <Member Name="Product_Detected" Datatype="Bool" Address="%I0.4" Comment="Product sensor" />
-    <Member Name="Start_Enable" Datatype="Bool" Address="%M100.0" Comment="Start enable" />
-    <Member Name="Stop_Button" Datatype="Bool" Address="%I0.5" Comment="Stop button" />
-    <Member Name="Emergency_Stop" Datatype="Bool" Address="%I0.6" Comment="Emergency stop" />
-    <Member Name="Conveyor_Motor" Datatype="Bool" Address="%Q0.2" Comment="Conveyor motor" />
-  </SW.Blocks.FB>
-</Document>`;
+const siemensXml = readFileSync(new URL('./fixtures/siemens/tia_fb_motor_control.xml', import.meta.url), 'utf8');
+const mitsubishiFixtureCsv = readFileSync(new URL('./fixtures/mitsubishi/gxworks3_labels.csv', import.meta.url), 'utf8');
 
-const mitsubishiCsv = `Label,Device,Data Type,Comment,Program
-ProductSensor,X10,BIT,Product sensor,MAIN
-StartEnable,M100,BIT,Start enable,MAIN
-StopButton,X11,BIT,Stop button,MAIN
-EmergencyStop,X12,BIT,Emergency stop,MAIN
-ConveyorMotor,Y20,BIT,Conveyor motor,MAIN`;
+const mitsubishiCsv = `${mitsubishiFixtureCsv}
+ExistingTimer,T200,TIMER,Used timer,MAIN`;
 
 test('createChangePlan builds Siemens SCL patch candidates and timer harness results', () => {
   const analysis = analyzePlcProject({
@@ -61,7 +50,7 @@ test('createChangePlan builds Mitsubishi ladder listing patch candidates', () =>
 
   assert.equal(changePlan.version, 'mitsubishi-change-assistant');
   assert.equal(changePlan.recommendedPatch.status, 'candidate');
-  assert.equal(changePlan.recommendedPatch.patchArtifacts.some((artifact) => artifact.content.includes('OUT T200 K30')), true);
+  assert.equal(changePlan.recommendedPatch.patchArtifacts.some((artifact) => artifact.content.includes('OUT T201 K30')), true);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.candidate.lst'), true);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.candidate.csv'), true);
   assert.equal(changePlan.simulatorTarget.includes('GX Works3'), true);

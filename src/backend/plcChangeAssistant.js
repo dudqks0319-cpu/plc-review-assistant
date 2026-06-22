@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  includesSafetyKeyword,
+  unsafeModificationRequested as deterministicUnsafeModificationRequested
+} from './safetyValidator.js';
 
 const SAFETY_KEYWORDS = [
   'emergency',
@@ -233,18 +237,7 @@ function extractDelaySeconds(requestText) {
 }
 
 function unsafeModificationRequested(requestText) {
-  const normalized = lower(requestText);
-  return SAFETY_KEYWORDS.some((safetyKeyword) =>
-    UNSAFE_ACTION_KEYWORDS.some((actionKeyword) => {
-      const safety = safetyKeyword.toLowerCase();
-      const action = actionKeyword.toLowerCase();
-      return (
-        normalized.includes(safety) &&
-        normalized.includes(action) &&
-        Math.abs(normalized.indexOf(safety) - normalized.indexOf(action)) < 48
-      );
-    })
-  );
+  return deterministicUnsafeModificationRequested(requestText);
 }
 
 function scoreCandidateLocations(project, targetOutput, startConditions, stopConditions) {
@@ -315,9 +308,40 @@ function createSiemensPatch(requirement, targetOutput, startConditions, stopCond
   ];
 }
 
-function createMitsubishiPatch(requirement, targetOutput, startConditions, stopConditions) {
+function collectUsedMitsubishiDevices(project, prefix) {
+  const values = [
+    ...(project?.variables || []).map((item) => item.address),
+    ...(project?.ioAddresses || []).map((item) => item.address)
+  ].filter(Boolean);
+  const pattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
+  return new Set(
+    values
+      .map((value) => String(value).toUpperCase().match(pattern)?.[1])
+      .filter(Boolean)
+      .map(Number)
+  );
+}
+
+function chooseMitsubishiTimer(project) {
+  const usedTimers = collectUsedMitsubishiDevices(project, 'T');
+  for (let timer = 200; timer <= 255; timer += 1) {
+    if (!usedTimers.has(timer)) {
+      return `T${timer}`;
+    }
+  }
+
+  for (let timer = 0; timer <= 199; timer += 1) {
+    if (!usedTimers.has(timer)) {
+      return `T${timer}`;
+    }
+  }
+
+  return 'T_UNASSIGNED';
+}
+
+function createMitsubishiPatch(requirement, targetOutput, startConditions, stopConditions, project) {
   const delay = requirement.delaySeconds || 0;
-  const timerDevice = 'T200';
+  const timerDevice = chooseMitsubishiTimer(project);
   const startLines = startConditions.map((element, index) => `${index === 0 ? 'LD' : 'AND'} ${mitsubishiOperand(element)}`);
   const stopLines = stopConditions.map((element) => `ANI ${mitsubishiOperand(element)}`);
   const target = mitsubishiOperand(targetOutput);
@@ -553,14 +577,53 @@ function riskLevel(requestText, blockedReason, stopConditions) {
     return 'blocked';
   }
 
-  if (includesAny(requestText, SAFETY_KEYWORDS) || stopConditions.some((condition) => includesAny(`${condition.name} ${condition.comment}`, SAFETY_KEYWORDS))) {
+  if (includesSafetyKeyword(requestText) || stopConditions.some((condition) => includesSafetyKeyword(`${condition.name} ${condition.comment}`))) {
     return 'high';
   }
 
   return 'medium';
 }
 
-export function createChangePlan({ analysis, vendor, requestText, sourceContent = '', sourceFilename = '' }) {
+function mergeTargetOutput(ruleTarget, normalizedTarget) {
+  if (!normalizedTarget || typeof normalizedTarget !== 'object') {
+    return ruleTarget;
+  }
+
+  return {
+    ...ruleTarget,
+    name: normalizedTarget.name || ruleTarget.name,
+    address: normalizedTarget.address || ruleTarget.address,
+    confidence: Math.max(Number(normalizedTarget.confidence || 0), Number(ruleTarget.confidence || 0)),
+    reason: normalizedTarget.name || normalizedTarget.address ? 'Codex/규칙 기반 정규화 결과를 교차 반영했습니다.' : ruleTarget.reason
+  };
+}
+
+function normalizedConditionNames(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return values
+    .map((value) => {
+      if (typeof value === 'string') {
+        return value;
+      }
+      return value?.name || value?.address || '';
+    })
+    .filter(Boolean);
+}
+
+export function createChangePlan({
+  analysis,
+  vendor,
+  requestText,
+  sourceContent = '',
+  sourceFilename = '',
+  normalizedRequirementInput = null,
+  safetyValidation = null,
+  normalizationSource = 'deterministic-rules',
+  fallbackReason = null
+}) {
   const selectedVendor = vendor === 'mitsubishi' ? 'mitsubishi' : 'siemens';
   const profile = VENDOR_PROFILES[selectedVendor];
   const project = analysis?.project || {};
@@ -570,32 +633,41 @@ export function createChangePlan({ analysis, vendor, requestText, sourceContent 
     throw new Error('회로수정 요청 내용이 필요합니다.');
   }
 
-  const targetOutput = findTargetOutput(project, request);
+  const targetOutput = mergeTargetOutput(findTargetOutput(project, request), normalizedRequirementInput?.targetOutput);
   const startConditions = findConditionElements(project, request, 'start');
   const stopConditions = findConditionElements(project, request, 'stop');
-  const delaySeconds = extractDelaySeconds(request);
+  const delaySeconds = Number(normalizedRequirementInput?.delaySeconds || 0) || extractDelaySeconds(request);
+  const safetyReasons = Array.isArray(safetyValidation?.reasons) ? safetyValidation.reasons : [];
   const blockedReason = unsafeModificationRequested(request)
     ? '안전회로 또는 비상정지 조건을 우회/제거/무시하는 변경으로 해석되어 자동 패치 생성을 중단했습니다.'
-    : null;
+    : safetyReasons.length > 0
+      ? safetyReasons.join(' ')
+      : null;
   const normalizedRequirement = {
     userRequest: request,
     targetBehavior:
-      delaySeconds > 0
+      normalizedRequirementInput?.targetBehavior ||
+      (delaySeconds > 0
         ? `${displayElement(targetOutput)} ${delaySeconds}초 지연 기동 후보`
-        : `${displayElement(targetOutput)} 제어 조건 변경 후보`,
+        : `${displayElement(targetOutput)} 제어 조건 변경 후보`),
     targetOutput,
     delaySeconds,
     startConditions,
     stopConditions,
-    priorityRules: ['stop_conditions_override_start', 'existing_safety_interlocks_must_remain'],
-    safetyNote: '비상정지와 안전회로는 PLC 로직 자동수정 대상이 아니며 기존 안전 절차를 유지해야 합니다.'
+    codexStartConditionHints: normalizedConditionNames(normalizedRequirementInput?.startConditions),
+    codexStopConditionHints: normalizedConditionNames(normalizedRequirementInput?.stopConditions),
+    priorityRules: normalizedRequirementInput?.priorityRules?.length
+      ? normalizedRequirementInput.priorityRules
+      : ['stop_conditions_override_start', 'existing_safety_interlocks_must_remain'],
+    safetyNote: normalizedRequirementInput?.safetyNotes?.join(' ') || '비상정지와 안전회로는 PLC 로직 자동수정 대상이 아니며 기존 안전 절차를 유지해야 합니다.',
+    uncertainties: normalizedRequirementInput?.uncertainties || []
   };
   const candidateLocations = scoreCandidateLocations(project, targetOutput, startConditions, stopConditions);
   const patchArtifacts =
     blockedReason === null
       ? selectedVendor === 'siemens'
         ? createSiemensPatch(normalizedRequirement, targetOutput, startConditions, stopConditions)
-        : createMitsubishiPatch(normalizedRequirement, targetOutput, startConditions, stopConditions)
+        : createMitsubishiPatch(normalizedRequirement, targetOutput, startConditions, stopConditions, project)
       : [];
   const expectedBehavior = createExpectedBehavior(normalizedRequirement);
   const testCases = createTestCases(normalizedRequirement);
@@ -616,6 +688,11 @@ export function createChangePlan({ analysis, vendor, requestText, sourceContent 
     version: profile.id,
     title: profile.title,
     vendor: selectedVendor,
+    requirementNormalization: {
+      source: normalizationSource,
+      fallbackReason,
+      safetyValidation: safetyValidation || { ok: true, reasons: [] }
+    },
     normalizedRequirement,
     affectedElements: [
       {
