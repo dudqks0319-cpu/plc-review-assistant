@@ -32,6 +32,8 @@ let selectedFile = null;
 let currentAnalysis = null;
 let currentChangePlan = null;
 let currentSourceContent = '';
+let analysisBusy = false;
+let changeBusy = false;
 
 function setMessage(text, tone = 'neutral') {
   elements.message.textContent = text;
@@ -39,8 +41,20 @@ function setMessage(text, tone = 'neutral') {
 }
 
 function setBusy(isBusy) {
-  elements.analyzeButton.disabled = isBusy || !selectedFile;
-  elements.analyzeButton.textContent = isBusy ? '분석 중' : '분석 시작';
+  analysisBusy = isBusy;
+  updateAnalyzeButtonState();
+  updateChangeButtonState();
+}
+
+function updateAnalyzeButtonState() {
+  elements.analyzeButton.disabled = analysisBusy || !selectedFile;
+  elements.analyzeButton.textContent = analysisBusy ? '분석 중' : '분석 시작';
+}
+
+function updateChangeButtonState() {
+  const hasRequest = elements.changeRequest.value.trim().length > 0;
+  elements.changeButton.disabled = analysisBusy || changeBusy || !hasRequest;
+  elements.changeButton.textContent = changeBusy ? '생성 중' : '수정 후보 생성';
 }
 
 function formatBytes(bytes) {
@@ -71,6 +85,58 @@ async function requestJson(path, options = {}) {
   }
 
   return data;
+}
+
+function selectedAssistantVendor() {
+  const value = new FormData(elements.form).get('assistant-version');
+  return value === 'siemens' ? 'siemens' : 'mitsubishi';
+}
+
+function createDraftAnalysis(vendor, requestText) {
+  const id = `draft-${Date.now().toString(36)}`;
+  const vendorLabel = vendor === 'siemens' ? 'Siemens' : 'Mitsubishi';
+  const filename = `${vendor}-natural-language-draft.txt`;
+
+  return {
+    id: `analysis-${id}`,
+    project: {
+      id: `project-${id}`,
+      name: `${vendorLabel} natural-language draft`,
+      vendor,
+      source: {
+        filename,
+        fileType: 'natural-language-draft',
+        detectedBy: 'request-only'
+      },
+      blocks: [],
+      variables: [],
+      ioAddresses: [],
+      callGraph: [],
+      protectedItems: [],
+      parserWarnings: ['PLC export file was not provided. Existing project impact analysis is unavailable.']
+    },
+    summary: {
+      blockCount: 0,
+      variableCount: 0,
+      ioAddressCount: 0,
+      callEdgeCount: 0,
+      protectedItemCount: 0,
+      severityCounts: { high: 0, medium: 0, low: 0, info: 0 },
+      languageDistribution: {}
+    },
+    findings: [],
+    assistantSummary: [
+      `${vendorLabel} 파일 없는 자연어 초안 모드입니다.`,
+      '기존 PLC export가 없어 블록, 태그, I/O 영향 분석은 수행하지 않았습니다.',
+      `요청: ${requestText}`
+    ].join('\n'),
+    limitations: [
+      'PLC export 파일이 없어 기존 회로와의 충돌, 호출 관계, I/O 중복을 확인하지 못합니다.',
+      '생성되는 내용은 신규 로직 초안 또는 검토용 후보이며 실제 프로젝트 반영 전 주소/태그 매핑이 필요합니다.',
+      '벤더 툴 컴파일, 시뮬레이터 검증, 자격 있는 PLC 엔지니어 승인이 필요합니다.',
+      '온라인 PLC 접속, PLC 쓰기, 자동 수정 기능은 제공하지 않습니다.'
+    ]
+  };
 }
 
 function createElement(tag, className, text) {
@@ -176,7 +242,7 @@ function renderChangePlan(changePlan) {
   panel.replaceChildren();
 
   if (!changePlan) {
-    panel.append(createElement('p', 'muted-line', '분석 후 회로수정 요청을 입력하면 수정 후보가 표시됩니다.'));
+    panel.append(createElement('p', 'muted-line', '파일 분석 후 또는 자연어 요청만 입력하면 수정 후보가 표시됩니다.'));
     return;
   }
 
@@ -288,7 +354,7 @@ function renderAnalysis(analysis) {
   elements.reportButtons.forEach((button) => {
     button.disabled = false;
   });
-  elements.changeButton.disabled = false;
+  updateChangeButtonState();
 }
 
 async function analyzeSelectedFile(event) {
@@ -325,41 +391,47 @@ async function analyzeSelectedFile(event) {
 }
 
 async function createChangePlan() {
-  if (!currentAnalysis) {
-    return;
-  }
-
   const requestText = elements.changeRequest.value.trim();
   if (!requestText) {
     setMessage('회로수정 요청을 입력해 주세요.', 'error');
     return;
   }
 
-  elements.changeButton.disabled = true;
-  elements.changeButton.textContent = '생성 중';
+  changeBusy = true;
+  updateChangeButtonState();
   setMessage('수정 후보와 하네스 결과를 생성하고 있습니다.');
 
   try {
-    const vendor = new FormData(elements.form).get('assistant-version') || 'mitsubishi';
+    const vendor = selectedAssistantVendor();
+    const hadAnalysis = Boolean(currentAnalysis);
+    const analysisForRequest = currentAnalysis || createDraftAnalysis(vendor, requestText);
     const response = await requestJson('/api/v1/change-plans', {
       method: 'POST',
       body: JSON.stringify({
-        analysis: currentAnalysis,
+        analysis: analysisForRequest,
         vendor,
         requestText,
         sourceContent: currentSourceContent,
-        sourceFilename: selectedFile?.name || currentAnalysis.project.source.filename
+        sourceFilename: selectedFile?.name || analysisForRequest.project.source.filename
       })
     });
+    if (!hadAnalysis) {
+      renderAnalysis(analysisForRequest);
+    }
     currentChangePlan = response.data;
     renderChangePlan(currentChangePlan);
     activateTab('change');
-    setMessage('회로수정 후보가 생성되었습니다. 실제 반영 전 엔지니어 검토가 필요합니다.', 'success');
+    setMessage(
+      hadAnalysis
+        ? '회로수정 후보가 생성되었습니다. 실제 반영 전 엔지니어 검토가 필요합니다.'
+        : '파일 없는 신규 회로 초안 후보가 생성되었습니다. 실제 프로젝트 반영 전 주소/태그 매핑이 필요합니다.',
+      'success'
+    );
   } catch (error) {
     setMessage(error.message, 'error');
   } finally {
-    elements.changeButton.disabled = false;
-    elements.changeButton.textContent = '수정 후보 생성';
+    changeBusy = false;
+    updateChangeButtonState();
   }
 }
 
@@ -426,13 +498,14 @@ elements.fileInput.addEventListener('change', () => {
   if (!selectedFile) {
     elements.fileName.textContent = 'XML, CSV, TXT export 파일';
     elements.fileMeta.textContent = 'Siemens TIA XML 또는 Mitsubishi CSV/TXT';
-    elements.analyzeButton.disabled = true;
+    currentSourceContent = '';
+    updateAnalyzeButtonState();
     return;
   }
 
   elements.fileName.textContent = selectedFile.name;
   elements.fileMeta.textContent = `${formatBytes(selectedFile.size)} · ${selectedFile.type || 'export file'}`;
-  elements.analyzeButton.disabled = false;
+  updateAnalyzeButtonState();
   setMessage('');
 });
 
@@ -448,9 +521,12 @@ document.querySelectorAll('input[name="assistant-version"]').forEach((input) => 
 
 elements.form.addEventListener('submit', analyzeSelectedFile);
 elements.changeButton.addEventListener('click', createChangePlan);
+elements.changeRequest.addEventListener('input', updateChangeButtonState);
 elements.tabs.forEach((tab) => tab.addEventListener('click', () => activateTab(tab.dataset.tab)));
 elements.reportButtons.forEach((button) => {
   button.addEventListener('click', () => downloadReport(button.dataset.report));
 });
 
+updateAnalyzeButtonState();
+updateChangeButtonState();
 checkHealth();

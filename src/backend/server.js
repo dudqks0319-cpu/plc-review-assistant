@@ -1,4 +1,5 @@
 import { createServer as createHttpServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { extname, join, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -168,9 +169,62 @@ function validateReportPayload(body) {
   };
 }
 
+function buildDraftId(prefix, ...parts) {
+  const hash = createHash('sha1').update(parts.filter(Boolean).join('|')).digest('hex').slice(0, 10);
+  return `${prefix}-${hash}`;
+}
+
+function createDraftAnalysisContext({ vendor, requestText, sourceFilename }) {
+  const selectedVendor = vendor === 'mitsubishi' ? 'mitsubishi' : 'siemens';
+  const filename = sourceFilename || `${selectedVendor}-natural-language-draft.txt`;
+  const projectId = buildDraftId('project-draft', selectedVendor, requestText);
+  const vendorLabel = selectedVendor === 'mitsubishi' ? 'Mitsubishi' : 'Siemens';
+
+  return {
+    id: buildDraftId('analysis-draft', projectId, requestText),
+    project: {
+      id: projectId,
+      name: `${vendorLabel} natural-language draft`,
+      vendor: selectedVendor,
+      source: {
+        filename,
+        fileType: 'natural-language-draft',
+        detectedBy: 'request-only'
+      },
+      blocks: [],
+      variables: [],
+      ioAddresses: [],
+      callGraph: [],
+      protectedItems: [],
+      parserWarnings: ['PLC export file was not provided. Existing project impact analysis is unavailable.']
+    },
+    summary: {
+      blockCount: 0,
+      variableCount: 0,
+      ioAddressCount: 0,
+      callEdgeCount: 0,
+      protectedItemCount: 0,
+      severityCounts: { high: 0, medium: 0, low: 0, info: 0 },
+      languageDistribution: {}
+    },
+    findings: [],
+    assistantSummary: [
+      `${vendorLabel} 파일 없는 자연어 초안 모드입니다.`,
+      '기존 PLC export가 없어 블록, 태그, I/O 영향 분석은 수행하지 않았습니다.',
+      `요청: ${requestText}`
+    ].join('\n'),
+    limitations: [
+      'PLC export 파일이 없어 기존 회로와의 충돌, 호출 관계, I/O 중복을 확인하지 못합니다.',
+      '생성되는 내용은 신규 로직 초안 또는 검토용 후보이며 실제 프로젝트 반영 전 주소/태그 매핑이 필요합니다.',
+      '벤더 툴 컴파일, 시뮬레이터 검증, 자격 있는 PLC 엔지니어 승인이 필요합니다.',
+      '온라인 PLC 접속, PLC 쓰기, 자동 수정 기능은 제공하지 않습니다.'
+    ]
+  };
+}
+
 function validateChangePlanPayload(body) {
-  if (!body || typeof body !== 'object' || !body.analysis || typeof body.analysis !== 'object') {
-    throw new Error('analysis 객체가 필요합니다.');
+  if (!body || typeof body !== 'object') {
+    throw new Error('요청 본문이 올바르지 않습니다.');
   }
 
   if (typeof body.requestText !== 'string' || body.requestText.trim().length === 0) {
@@ -178,12 +232,19 @@ function validateChangePlanPayload(body) {
   }
 
   const vendor = body.vendor === 'mitsubishi' ? 'mitsubishi' : 'siemens';
+  const requestText = body.requestText.trim();
+  const sourceFilename = typeof body.sourceFilename === 'string' ? body.sourceFilename : '';
+  const analysis =
+    body.analysis && typeof body.analysis === 'object'
+      ? body.analysis
+      : createDraftAnalysisContext({ vendor, requestText, sourceFilename });
+
   return {
-    analysis: body.analysis,
+    analysis,
     vendor,
-    requestText: body.requestText,
+    requestText,
     sourceContent: typeof body.sourceContent === 'string' ? body.sourceContent : '',
-    sourceFilename: typeof body.sourceFilename === 'string' ? body.sourceFilename : body.analysis?.project?.source?.filename || ''
+    sourceFilename: sourceFilename || analysis?.project?.source?.filename || ''
   };
 }
 

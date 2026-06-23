@@ -163,3 +163,27 @@ test('POST /api/v1/codex/change-requirements falls back when Codex normalizer is
   assert.equal(body.data.requirement.delaySeconds, 3);
   assert.equal(body.data.validation.ok, true);
 });
+
+test('POST /api/v1/change-plans creates a draft plan without uploaded analysis', async () => {
+  const { response, body } = await requestJson('/api/v1/change-plans', {
+    method: 'POST',
+    body: JSON.stringify({
+      vendor: 'mitsubishi',
+      requestText: '컨베이어 모터를 3초 뒤 켜고 정지 조건은 우선 적용'
+    })
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(body.data.version, 'mitsubishi-change-assistant');
+  assert.equal(body.data.normalizedRequirement.delaySeconds, 3);
+  assert.equal(body.data.recommendedPatch.status, 'candidate');
+  assert.equal(body.data.simulation.result, 'pass');
+  assert.equal(
+    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.candidate.lst'),
+    true
+  );
+  assert.equal(
+    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.change-plan.json'),
+    true
+  );
+});

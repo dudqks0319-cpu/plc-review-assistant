@@ -40,6 +40,7 @@ Explicitly out of scope:
 - Generates a Korean rule-based review summary from deterministic analysis data
 - Optionally uses server-side Codex app-server normalization for ambiguous natural-language change requests
 - Converts a natural-language change request into a structured change plan
+- Can generate a file-less natural-language draft plan when no PLC export has been uploaded
 - Finds target output, start conditions, stop/interlock candidates, and likely affected blocks
 - Generates vendor-specific patch candidates:
   - Siemens SCL and SimaticML notes
@@ -142,6 +143,8 @@ The response includes:
 - vendor-specific patch candidates
 - downloadable candidate files
 - required approvals and warnings
+
+For early ideation, `analysis`, `sourceFilename`, and `sourceContent` may be omitted. In that mode the server creates a `natural-language-draft` context and returns a draft candidate only. It cannot check existing tags, addresses, blocks, or collisions until a real vendor export is uploaded.
 
 ## Security Notes
 
