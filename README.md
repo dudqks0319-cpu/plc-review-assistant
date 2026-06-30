@@ -15,7 +15,7 @@ Supported inputs:
 
 Two product versions are exposed in the app:
 
-- **Mitsubishi 분석 및 회로수정**: GX Works CSV/TXT analysis, ladder listing patch candidates, GX Works3 simulator scenario candidates
+- **Mitsubishi GX Works2 분석 및 회로수정**: GX Works2/GX Works CSV/TXT analysis, ladder instruction/listing patch candidates, GX Works2/GX Simulator scenario candidates
 - **Siemens PLC 분석 및 회로수정**: TIA XML/SCL analysis, SCL/SimaticML patch candidates, S7-PLCSIM Advanced scenario candidates
 
 Explicitly out of scope:
@@ -41,10 +41,11 @@ Explicitly out of scope:
 - Optionally uses server-side Codex app-server normalization for ambiguous natural-language change requests
 - Converts a natural-language change request into a structured change plan
 - Can generate a file-less natural-language draft plan when no PLC export has been uploaded
+- Generates GX Works2-oriented ladder instruction drafts and visible ladder previews for basic natural-language requests such as self-holding circuits and simple two-floor elevator training circuits
 - Finds target output, start conditions, stop/interlock candidates, and likely affected blocks
 - Generates vendor-specific patch candidates:
   - Siemens SCL and SimaticML notes
-  - Mitsubishi ladder listing and CSV rows
+  - Mitsubishi GX Works2 instruction list, ladder preview notes, and CSV rows
 - Generates downloadable candidate files from the Codex app server:
   - modified candidate program text/export
   - vendor patch candidate
@@ -141,10 +142,19 @@ The response includes:
 - test cases
 - built-in harness result
 - vendor-specific patch candidates
+- GX Works2 circuit preview when the request is a supported natural-language draft
 - downloadable candidate files
 - required approvals and warnings
 
 For early ideation, `analysis`, `sourceFilename`, and `sourceContent` may be omitted. In that mode the server creates a `natural-language-draft` context and returns a draft candidate only. It cannot check existing tags, addresses, blocks, or collisions until a real vendor export is uploaded.
+
+Supported file-less GX Works2 draft examples:
+
+- `자기유지회로 만들어줘`
+- `2층 엘리베이터 회로 만들어줘`
+- `제품 감지 후 컨베이어 모터를 3초 뒤 켜줘`
+
+These produce a visible I/O map, ASCII ladder preview, GX Works2 instruction-list candidate, CSV row candidate, and downloadable `.gxworks2.lst` file. They are engineering review drafts, not certified field logic.
 
 ## Security Notes
 
@@ -178,4 +188,4 @@ The app does not require the Codex normalizer to run. If Codex is unavailable, t
 
 PLC logic is context-dependent. Static analysis can highlight review candidates, but it cannot prove live equipment behavior. HMI references, drives, field wiring, scan-cycle timing, and safety validation must be checked through the owner’s normal engineering process.
 
-The built-in harness is intentionally small. It validates timer delay and stop-priority expectations for the generated candidate, then produces vendor-simulator scenarios for qualified engineers to run in TIA Portal/S7-PLCSIM Advanced or GX Works3 Simulator.
+The built-in harness is intentionally small. It validates timer delay and stop-priority expectations for the generated candidate, then produces vendor-simulator scenarios for qualified engineers to run in TIA Portal/S7-PLCSIM Advanced or GX Works2/GX Simulator.

@@ -495,6 +495,58 @@ h3 {
   line-height: 1.5;
 }
 
+.circuit-draft-card {
+  grid-column: 1 / -1;
+}
+
+.io-map {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.io-map div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px;
+  background: var(--panel-muted);
+}
+
+.io-map strong {
+  font-size: 14px;
+}
+
+.io-map span,
+.io-map small,
+.ladder-title {
+  overflow-wrap: anywhere;
+}
+
+.io-map span {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.io-map small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ladder-title {
+  display: block;
+  margin-top: 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.change-card .ladder-preview-block {
+  background: #111a16;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .change-meta {
   display: flex;
   flex-wrap: wrap;

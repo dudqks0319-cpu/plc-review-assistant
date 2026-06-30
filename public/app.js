@@ -284,6 +284,37 @@ function renderChangePlan(changePlan) {
   harness.append(timeline);
   grid.append(harness);
 
+  if (changePlan.circuitDraft) {
+    const draft = changePlan.circuitDraft;
+    const circuit = createElement('article', 'change-card circuit-draft-card');
+    circuit.append(createElement('h4', '', 'GX Works2 회로 미리보기'));
+    circuit.append(createElement('p', 'muted-line', `${draft.title} · ${draft.circuitType}`));
+
+    const ioMap = createElement('div', 'io-map');
+    draft.ioMap.forEach((item) => {
+      const row = createElement('div');
+      row.append(createElement('strong', '', item.device));
+      row.append(createElement('span', '', `${item.label} / ${item.role}`));
+      row.append(createElement('small', '', item.contact));
+      ioMap.append(row);
+    });
+    circuit.append(ioMap);
+
+    draft.ladderPreview.forEach((network) => {
+      circuit.append(createElement('strong', 'ladder-title', network.title));
+      circuit.append(createElement('pre', 'ladder-preview-block', network.ascii));
+      circuit.append(createElement('p', 'muted-line', network.explanation));
+    });
+
+    circuit.append(createElement('strong', 'ladder-title', 'GX Works2 명령 리스트'));
+    circuit.append(createElement('pre', 'ladder-preview-block', draft.instructionList.join('\n')));
+
+    const operationList = createElement('ul', 'limit-list');
+    draft.operationSummary.forEach((item) => operationList.append(createElement('li', '', item)));
+    circuit.append(operationList);
+    grid.append(circuit);
+  }
+
   const patch = createElement('article', 'change-card');
   patch.append(createElement('h4', '', '벤더별 패치 후보'));
   if (changePlan.recommendedPatch.patchArtifacts.length === 0) {
