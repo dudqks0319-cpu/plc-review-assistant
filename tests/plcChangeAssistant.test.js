@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { analyzePlcProject } from '../src/backend/plcAnalyzer.js';
-import { createChangePlan } from '../src/backend/plcChangeAssistant.js';
+import { createChangePlan } from '../src/backend/beginnerChangeAssistant.js';
 
 const siemensXml = readFileSync(new URL('./fixtures/siemens/tia_fb_motor_control.xml', import.meta.url), 'utf8');
 const mitsubishiFixtureCsv = readFileSync(new URL('./fixtures/mitsubishi/gxworks3_labels.csv', import.meta.url), 'utf8');
@@ -49,9 +49,11 @@ test('createChangePlan builds Siemens SCL patch candidates and timer harness res
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'conveyor.candidate.xml'), true);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'conveyor.candidate.scl'), true);
   assert.equal(changePlan.recommendedPatch.engineerReviewRequired, true);
+  assert.equal(changePlan.readiness.mode, 'existing-project-review');
+  assert.equal(changePlan.readiness.canWriteToPlc, false);
 });
 
-test('createChangePlan builds Mitsubishi ladder listing patch candidates', () => {
+test('createChangePlan puts the GX Works2 instruction list inside an uploaded Mitsubishi candidate program', () => {
   const analysis = analyzePlcProject({
     filename: 'labels.csv',
     vendor: 'mitsubishi',
@@ -65,10 +67,15 @@ test('createChangePlan builds Mitsubishi ladder listing patch candidates', () =>
     sourceFilename: 'labels.csv'
   });
 
+  const modifiedCandidate = changePlan.candidateFiles.find((file) => file.filename === 'labels.candidate.lst');
+
   assert.equal(changePlan.version, 'mitsubishi-change-assistant');
   assert.equal(changePlan.recommendedPatch.status, 'candidate');
   assert.equal(changePlan.recommendedPatch.patchArtifacts.some((artifact) => artifact.content.includes('OUT T201 K30')), true);
-  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.candidate.lst'), true);
+  assert.ok(modifiedCandidate);
+  assert.match(modifiedCandidate.content, /OUT T201 K30/);
+  assert.match(modifiedCandidate.content, /Review in a GX Works2 offline project/);
+  assert.doesNotMatch(modifiedCandidate.content, /GX Works3/);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.candidate.csv'), true);
   assert.equal(changePlan.simulatorTarget.includes('GX Works2'), true);
 });
@@ -86,13 +93,15 @@ test('createChangePlan blocks unsafe safety bypass requests', () => {
   });
 
   assert.equal(changePlan.riskLevel, 'blocked');
+  assert.equal(changePlan.executionScope, 'blocked');
   assert.equal(changePlan.recommendedPatch.status, 'blocked');
   assert.equal(changePlan.recommendedPatch.patchArtifacts.length, 0);
   assert.equal(changePlan.candidateFiles.length, 0);
   assert.equal(changePlan.simulation.result, 'blocked');
+  assert.equal(changePlan.readiness.level, 'blocked');
 });
 
-test('createChangePlan builds GX Works2 self-holding circuit drafts from natural language', () => {
+test('createChangePlan builds file-less GX Works2 self-holding drafts without pretending an original program was modified', () => {
   const changePlan = createChangePlan({
     analysis: draftMitsubishiAnalysis(),
     vendor: 'mitsubishi',
@@ -106,14 +115,19 @@ test('createChangePlan builds GX Works2 self-holding circuit drafts from natural
   assert.equal(changePlan.circuitDraft.instructionList.includes('ANI X1'), true);
   assert.equal(changePlan.circuitDraft.instructionList.includes('OUT Y0'), true);
   assert.equal(changePlan.circuitDraft.ladderPreview[0].ascii.includes('HOLD'), true);
+  assert.equal(changePlan.circuitDraft.assumptions.some((item) => item.includes('X1=ON')), true);
+  assert.equal(changePlan.readiness.mode, 'new-circuit-draft');
+  assert.equal(changePlan.readiness.checks.find((item) => item.id === 'addresses').status, 'unknown');
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.candidate.lst'), false);
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.candidate.diff'), false);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.gxworks2.lst'), true);
 });
 
-test('createChangePlan builds GX Works2 two-floor elevator circuit drafts from natural language', () => {
+test('createChangePlan restricts elevator drafts to simulation-only output', () => {
   const changePlan = createChangePlan({
     analysis: draftMitsubishiAnalysis(),
     vendor: 'mitsubishi',
-    requestText: '엘리베이터 회로 만들어줘. 1층 호출 X0 2층 호출 X1 1층 리미트 X2 2층 리미트 X3 문닫힘 X4 비상정지 X5 상승 Y0 하강 Y1 문열림 Y2'
+    requestText: '2층 엘리베이터 교육용 회로 만들어줘. 1층 호출 X0 2층 호출 X1 1층 리미트 X2 2층 리미트 X3 문닫힘 X4 상승 Y0 하강 Y1 문열림 Y2'
   });
 
   assert.equal(changePlan.circuitDraft.targetPlatform, 'GX Works2');
@@ -123,5 +137,10 @@ test('createChangePlan builds GX Works2 two-floor elevator circuit drafts from n
   assert.equal(changePlan.circuitDraft.instructionList.includes('OUT Y0'), true);
   assert.equal(changePlan.circuitDraft.instructionList.includes('OUT Y1'), true);
   assert.equal(changePlan.circuitDraft.ladderPreview.some((network) => network.ascii.includes('2F CALL')), true);
-  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.gxworks2.lst'), true);
+  assert.equal(changePlan.riskLevel, 'high');
+  assert.equal(changePlan.executionScope, 'simulation-only');
+  assert.equal(changePlan.readiness.level, 'simulation-only');
+  assert.equal(changePlan.candidateFiles.some((file) => /candidate\.(lst|csv|diff)$/.test(file.filename)), false);
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.simulation-draft.txt'), true);
+  assert.equal(changePlan.warnings.some((warning) => warning.includes('인명 안전')), true);
 });
