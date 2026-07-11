@@ -3,136 +3,193 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PLC Review Assistant</title>
+    <meta
+      name="description"
+      content="자연어로 PLC 회로 초안을 만들고 기존 PLC export의 수정 후보를 검토하는 읽기 전용 도구"
+    />
+    <title>말로 만드는 PLC 회로 초안</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="app-header">
-      <div>
-        <p class="eyebrow">Read-only static analysis</p>
-        <h1>PLC Review Assistant</h1>
+      <div class="brand-copy">
+        <span class="brand-mark" aria-hidden="true">PLC</span>
+        <div>
+          <h1>말로 만드는 PLC 회로 초안</h1>
+          <p>원하는 동작을 평소 말처럼 적으면 검토용 회로 후보를 만들어 드립니다.</p>
+        </div>
       </div>
-      <div class="safety-strip" aria-label="Safety scope">
-        <span>읽기 전용</span>
-        <span>보호 블록 우회 없음</span>
-        <span>PLC 접속 없음</span>
+      <div class="header-status">
+        <span id="server-status" class="status-pill">서버 확인 중</span>
+        <span class="read-only-pill">PLC에 직접 쓰지 않음</span>
       </div>
     </header>
 
-    <main class="workspace">
-      <section class="upload-panel" aria-labelledby="upload-title">
-        <div class="section-heading">
-          <h2 id="upload-title">프로젝트 업로드</h2>
-          <span id="server-status" class="status-pill">확인 중</span>
+    <main class="app-shell">
+      <section class="builder-panel" aria-labelledby="builder-title">
+        <div class="panel-heading">
+          <div>
+            <span class="step-kicker">한 번에 만들기</span>
+            <h2 id="builder-title">무엇을 만들까요?</h2>
+          </div>
+          <span class="safe-badge">원본 파일 보호</span>
         </div>
 
-        <form id="analysis-form" class="analysis-form">
+        <form id="analysis-form" class="builder-form">
           <fieldset class="version-selector">
-            <legend>제품 버전</legend>
+            <legend><span>1</span> PLC 종류를 골라 주세요</legend>
             <label class="version-card">
               <input type="radio" name="assistant-version" value="mitsubishi" checked />
               <span>
                 <strong>Mitsubishi GX Works2</strong>
-                <small>GX Works2 명령 리스트, 래더 미리보기, 회로수정 후보</small>
+                <small>X, Y, M, T 주소와 명령 리스트 초안</small>
               </span>
             </label>
             <label class="version-card">
               <input type="radio" name="assistant-version" value="siemens" />
               <span>
                 <strong>Siemens PLC</strong>
-                <small>TIA XML/SCL 분석 및 회로수정 후보</small>
+                <small>TIA Portal XML과 SCL 수정 후보</small>
               </span>
             </label>
           </fieldset>
 
-          <label class="file-drop" for="project-file">
-            <input id="project-file" name="project-file" type="file" accept=".xml,.csv,.txt,.lst,.asc" />
-            <span class="file-icon" aria-hidden="true">PLC</span>
-            <strong id="file-name">XML, CSV, TXT export 파일</strong>
-            <small id="file-meta">Siemens TIA XML 또는 Mitsubishi CSV/TXT</small>
+          <section class="request-step" aria-labelledby="request-title">
+            <div class="step-title">
+              <span>2</span>
+              <div>
+                <h3 id="request-title">원하는 동작을 말로 적어 주세요</h3>
+                <p>입력, 출력, 멈추는 조건, 기다리는 시간을 함께 적으면 더 정확합니다.</p>
+              </div>
+            </div>
+            <label class="sr-only" for="change-request">회로 동작 설명</label>
+            <textarea
+              id="change-request"
+              rows="7"
+              maxlength="4000"
+              placeholder="예: 시작 버튼 X0을 누르면 모터 Y0이 켜지고, 정지 버튼 X1을 누르면 꺼지는 자기유지회로를 만들어줘."
+            ></textarea>
+            <div class="example-area" aria-label="요청 예시">
+              <span>예시를 눌러 보세요</span>
+              <div class="example-list">
+                <button
+                  type="button"
+                  class="example-button"
+                  data-example="자기유지회로 만들어줘. 시작은 X0, 정지는 X1, 출력은 Y0으로 해줘."
+                >
+                  자기유지회로
+                </button>
+                <button
+                  type="button"
+                  class="example-button"
+                  data-example="제품 감지 센서 X0이 켜지면 컨베이어 모터 Y0을 3초 뒤 켜고, 정지 입력 X1은 항상 우선하게 해줘."
+                >
+                  3초 뒤 모터 켜기
+                </button>
+                <button
+                  type="button"
+                  class="example-button danger-example"
+                  data-example="2층 엘리베이터 교육용 시뮬레이션 회로를 만들어줘. 호출 X0 X1, 도착 X2 X3, 문닫힘 X4, 상승 Y0, 하강 Y1, 문열림 Y2로 해줘."
+                >
+                  엘리베이터 교육용
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="file-step" aria-labelledby="file-step-title">
+            <div class="step-title">
+              <span>3</span>
+              <div>
+                <h3 id="file-step-title">기존 PLC 파일이 있으면 추가</h3>
+                <p>파일이 없어도 새 회로 초안은 만들 수 있습니다.</p>
+              </div>
+            </div>
+
+            <label class="file-drop" for="project-file">
+              <input id="project-file" name="project-file" type="file" accept=".xml,.csv,.txt,.lst,.asc" />
+              <span class="file-plus" aria-hidden="true">+</span>
+              <span>
+                <strong id="file-name">PLC export 파일 선택</strong>
+                <small id="file-meta">GX Works2 CSV/TXT/LST 또는 TIA Portal XML</small>
+              </span>
+            </label>
+            <button id="clear-file" class="text-button hidden" type="button">선택한 파일 빼기</button>
+            <div id="mode-hint" class="mode-hint" role="status"></div>
+          </section>
+
+          <label class="safety-confirm" for="safety-ack">
+            <input id="safety-ack" type="checkbox" required />
+            <span>
+              <strong>검토용 초안임을 확인했습니다</strong>
+              <small>실제 PLC에 넣기 전 백업, 컴파일, 시뮬레이션, 담당자 승인이 필요합니다.</small>
+            </span>
           </label>
 
-          <fieldset class="vendor-selector">
-            <legend>벤더</legend>
-            <label><input type="radio" name="vendor" value="auto" checked /> Auto</label>
-            <label><input type="radio" name="vendor" value="siemens" /> Siemens</label>
-            <label><input type="radio" name="vendor" value="mitsubishi" /> Mitsubishi</label>
-          </fieldset>
-
-          <button id="analyze-button" class="primary-action" type="submit" disabled>분석 시작</button>
+          <button id="change-button" class="primary-action" type="submit" disabled>안전한 회로 초안 만들기</button>
         </form>
 
-        <div id="message" class="message" role="status"></div>
-
-        <section class="change-request-box" aria-labelledby="change-request-title">
-          <h2 id="change-request-title">회로수정 요청</h2>
-          <textarea
-            id="change-request"
-            rows="7"
-            placeholder="예: 자기유지회로 만들어줘. 또는 2층 엘리베이터 회로 만들어줘. 또는 제품 감지 센서가 ON 되면 컨베이어 모터를 3초 후 켜지게 해줘."
-          ></textarea>
-          <button id="change-button" class="secondary-action" type="button" disabled>수정 후보 생성</button>
-        </section>
+        <div id="message" class="message" role="status" aria-live="polite"></div>
       </section>
 
       <section class="results-panel" aria-labelledby="results-title">
-        <div class="section-heading">
-          <h2 id="results-title">분석 결과</h2>
-          <div class="report-actions">
-            <button class="icon-button" type="button" data-report="markdown" disabled title="Markdown 다운로드">MD</button>
-            <button class="icon-button" type="button" data-report="excel" disabled title="Excel 다운로드">XLS</button>
-            <button class="icon-button" type="button" data-report="pdf" disabled title="PDF 다운로드">PDF</button>
+        <div class="results-heading">
+          <div>
+            <span class="step-kicker">검토 결과</span>
+            <h2 id="results-title">만들어진 회로 후보</h2>
+          </div>
+          <div class="report-actions" aria-label="보고서 다운로드">
+            <button class="report-button" type="button" data-report="markdown" disabled>요약</button>
+            <button class="report-button" type="button" data-report="excel" disabled>엑셀</button>
+            <button class="report-button" type="button" data-report="pdf" disabled>PDF</button>
           </div>
         </div>
 
         <div id="empty-state" class="empty-state">
-          <div class="logic-preview" aria-hidden="true">
-            <span></span><span></span><span></span><span></span>
+          <div class="empty-illustration" aria-hidden="true">
+            <span>입력</span><i></i><span>논리</span><i></i><span>출력</span>
           </div>
-          <p>분석 결과가 여기에 표시됩니다.</p>
+          <h3>왼쪽에 원하는 동작을 적어 주세요</h3>
+          <p>회로 그림, I/O 표, 명령 리스트, 확인할 위험을 이곳에 보여드립니다.</p>
         </div>
 
         <div id="analysis-view" class="analysis-view hidden">
-          <section class="summary-grid" aria-label="Summary metrics">
-            <div>
-              <span>블록</span>
-              <strong id="metric-blocks">0</strong>
-            </div>
-            <div>
-              <span>태그/변수</span>
-              <strong id="metric-variables">0</strong>
-            </div>
-            <div>
-              <span>I/O 주소</span>
-              <strong id="metric-io">0</strong>
-            </div>
-            <div>
-              <span>이슈 후보</span>
-              <strong id="metric-findings">0</strong>
-            </div>
-          </section>
+          <section id="readiness-view" aria-label="사용 준비 상태"></section>
 
-          <section class="assistant-summary" aria-labelledby="assistant-title">
-            <h3 id="assistant-title">규칙 기반 요약</h3>
-            <pre id="assistant-summary"></pre>
-          </section>
+          <details class="analysis-details">
+            <summary>파일 분석 내용 보기</summary>
+            <section class="summary-grid" aria-label="분석 요약">
+              <div><span>블록</span><strong id="metric-blocks">0</strong></div>
+              <div><span>태그·변수</span><strong id="metric-variables">0</strong></div>
+              <div><span>I/O 주소</span><strong id="metric-io">0</strong></div>
+              <div><span>확인할 항목</span><strong id="metric-findings">0</strong></div>
+            </section>
+            <section class="assistant-summary" aria-labelledby="assistant-title">
+              <h3 id="assistant-title">분석 설명</h3>
+              <pre id="assistant-summary"></pre>
+            </section>
+          </details>
 
-          <nav class="tabs" aria-label="Result tabs">
-            <button class="tab active" type="button" data-tab="findings">발견 항목</button>
-            <button class="tab" type="button" data-tab="change">회로수정</button>
+          <nav class="tabs" aria-label="결과 메뉴">
+            <button class="tab active" type="button" data-tab="change">회로 초안</button>
+            <button class="tab" type="button" data-tab="findings">확인할 문제</button>
             <button class="tab" type="button" data-tab="blocks">블록</button>
-            <button class="tab" type="button" data-tab="variables">태그/I/O</button>
-            <button class="tab" type="button" data-tab="limits">한계</button>
+            <button class="tab" type="button" data-tab="variables">태그·I/O</button>
+            <button class="tab" type="button" data-tab="limits">꼭 확인할 것</button>
           </nav>
 
-          <section id="tab-findings" class="tab-panel"></section>
-          <section id="tab-change" class="tab-panel hidden"></section>
+          <section id="tab-change" class="tab-panel"></section>
+          <section id="tab-findings" class="tab-panel hidden"></section>
           <section id="tab-blocks" class="tab-panel hidden"></section>
           <section id="tab-variables" class="tab-panel hidden"></section>
           <section id="tab-limits" class="tab-panel hidden"></section>
         </div>
       </section>
     </main>
+
+    <footer class="app-footer">
+      이 도구는 PLC에 접속하거나 프로그램을 자동 다운로드하지 않습니다. 안전회로와 보호 블록은 자동 수정하지 않습니다.
+    </footer>
 
     <script type="module" src="/app.js"></script>
   </body>
