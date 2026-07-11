@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
 
-const { createServer } = await import('../src/backend/server.js');
+const { createServer } = await import('../src/backend/beginnerServer.js');
 
 const sampleXml = `<?xml version="1.0"?>
 <Document>
@@ -104,6 +104,7 @@ test('POST /api/v1/reports returns markdown, excel, and pdf downloads', async ()
   assert.equal(changePlanResponse.body.data.version, 'siemens-plc-change-assistant');
   assert.equal(changePlanResponse.body.data.candidateFiles.some((file) => file.filename === 'pump.candidate.xml'), true);
   assert.equal(changePlanResponse.body.data.candidateFiles.some((file) => file.filename === 'pump.candidate.scl'), true);
+  assert.equal(changePlanResponse.body.data.readiness.mode, 'existing-project-review');
   const changePlan = changePlanResponse.body.data;
 
   const markdown = await fetch(`${baseUrl}/api/v1/reports`, {
@@ -164,7 +165,7 @@ test('POST /api/v1/codex/change-requirements falls back when Codex normalizer is
   assert.equal(body.data.validation.ok, true);
 });
 
-test('POST /api/v1/change-plans creates a draft plan without uploaded analysis', async () => {
+test('POST /api/v1/change-plans creates an honest file-less Mitsubishi draft', async () => {
   const { response, body } = await requestJson('/api/v1/change-plans', {
     method: 'POST',
     body: JSON.stringify({
@@ -178,12 +179,37 @@ test('POST /api/v1/change-plans creates a draft plan without uploaded analysis',
   assert.equal(body.data.normalizedRequirement.delaySeconds, 3);
   assert.equal(body.data.recommendedPatch.status, 'candidate');
   assert.equal(body.data.simulation.result, 'pass');
+  assert.equal(body.data.executionScope, 'engineering-candidate');
+  assert.equal(body.data.readiness.mode, 'new-circuit-draft');
+  assert.equal(body.data.readiness.canWriteToPlc, false);
   assert.equal(
-    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.candidate.lst'),
+    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.gxworks2.lst'),
     true
   );
   assert.equal(
     body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.change-plan.json'),
     true
   );
+  assert.equal(body.data.candidateFiles.some((file) => file.filename.endsWith('.candidate.lst')), false);
+  assert.equal(body.data.candidateFiles.some((file) => file.filename.endsWith('.candidate.diff')), false);
+});
+
+test('POST /api/v1/change-plans returns simulation-only files for elevator drafts', async () => {
+  const { response, body } = await requestJson('/api/v1/change-plans', {
+    method: 'POST',
+    body: JSON.stringify({
+      vendor: 'mitsubishi',
+      requestText: '2층 엘리베이터 교육용 회로. 호출 X0 X1, 도착 X2 X3, 문닫힘 X4, 상승 Y0, 하강 Y1, 문열림 Y2'
+    })
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(body.data.riskLevel, 'high');
+  assert.equal(body.data.executionScope, 'simulation-only');
+  assert.equal(body.data.recommendedPatch.status, 'simulation-only');
+  assert.equal(
+    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.simulation-draft.txt'),
+    true
+  );
+  assert.equal(body.data.candidateFiles.some((file) => /candidate\.(lst|csv|diff)$/.test(file.filename)), false);
 });
