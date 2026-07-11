@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { analyzePlcProject } from '../src/backend/plcAnalyzer.js';
-import { createChangePlan } from '../src/backend/plcChangeAssistant.js';
+import { createChangePlan } from '../src/backend/beginnerChangeAssistant.js';
 
 const siemensXml = readFileSync(new URL('./fixtures/siemens/tia_fb_motor_control.xml', import.meta.url), 'utf8');
 const mitsubishiFixtureCsv = readFileSync(new URL('./fixtures/mitsubishi/gxworks3_labels.csv', import.meta.url), 'utf8');
