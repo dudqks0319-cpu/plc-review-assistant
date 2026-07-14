@@ -17,13 +17,19 @@ let baseUrl;
 
 before(async () => {
   server = createServer();
-  await new Promise((resolve) => server.listen(0, resolve));
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
   const address = server.address();
   baseUrl = `http://127.0.0.1:${address.port}`;
 });
 
 after(async () => {
-  if (!server) {
+  if (!server?.listening) {
     return;
   }
 
@@ -36,6 +42,7 @@ after(async () => {
 
       resolve();
     });
+    server.closeAllConnections();
   });
 });
 

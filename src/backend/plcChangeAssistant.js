@@ -642,6 +642,21 @@ function createGxWorks2CircuitDraft({ requirement, requestText, targetOutput, st
   return createDelayedOutputDraft({ requirement, requestText, targetOutput, startConditions, stopConditions, project });
 }
 
+function resolveCircuitTargetOutput(circuitDraft, fallbackTarget) {
+  const outputs = (circuitDraft?.ioMap || []).filter((item) => /^Y\d/i.test(item.device));
+  if (outputs.length === 0) {
+    return fallbackTarget;
+  }
+
+  return {
+    ...fallbackTarget,
+    name: outputs.map((item) => item.label).join(' / '),
+    address: outputs.map((item) => item.device).join(', '),
+    confidence: Math.max(Number(fallbackTarget?.confidence || 0), 0.95),
+    reason: '자연어 회로 초안의 GX Works2 I/O 맵에서 출력 주소를 확인했습니다.'
+  };
+}
+
 function createGxWorks2PatchArtifacts(circuitDraft) {
   const instructionList = circuitDraft.instructionList.join('\n');
   const ladderPreview = circuitDraft.ladderPreview
@@ -709,12 +724,13 @@ function insertSiemensCandidateIntoSource(sourceContent, patchArtifacts) {
 }
 
 function insertMitsubishiCandidateIntoSource(sourceContent, patchArtifacts) {
-  const listing = patchArtifacts.find((artifact) => artifact.language === 'GX Works listing')?.content || '';
+  const listing =
+    patchArtifacts.find((artifact) => ['GX Works listing', 'GX Works2 IL'].includes(artifact.language))?.content || '';
   return [
     sourceContent.trimEnd(),
     '',
     '; PLC Change Assistant candidate patch',
-    '; Review in GX Works3 offline project before any field use.',
+    '; Review in a GX Works2 offline project before any field use.',
     listing,
     ''
   ].join('\n');
@@ -987,7 +1003,7 @@ export function createChangePlan({
     : safetyReasons.length > 0
       ? safetyReasons.join(' ')
       : null;
-  const normalizedRequirement = {
+  const baseNormalizedRequirement = {
     userRequest: request,
     targetBehavior:
       normalizedRequirementInput?.targetBehavior ||
@@ -1006,11 +1022,10 @@ export function createChangePlan({
     safetyNote: normalizedRequirementInput?.safetyNotes?.join(' ') || '비상정지와 안전회로는 PLC 로직 자동수정 대상이 아니며 기존 안전 절차를 유지해야 합니다.',
     uncertainties: normalizedRequirementInput?.uncertainties || []
   };
-  const candidateLocations = scoreCandidateLocations(project, targetOutput, startConditions, stopConditions);
   const circuitDraft =
     blockedReason === null && selectedVendor === 'mitsubishi'
       ? createGxWorks2CircuitDraft({
-          requirement: normalizedRequirement,
+          requirement: baseNormalizedRequirement,
           requestText: request,
           targetOutput,
           startConditions,
@@ -1018,10 +1033,24 @@ export function createChangePlan({
           project
         })
       : null;
+  const resolvedTargetOutput = resolveCircuitTargetOutput(circuitDraft, targetOutput);
+  const normalizedRequirement =
+    resolvedTargetOutput === targetOutput
+      ? baseNormalizedRequirement
+      : {
+          ...baseNormalizedRequirement,
+          targetBehavior:
+            normalizedRequirementInput?.targetBehavior ||
+            (delaySeconds > 0
+              ? `${displayElement(resolvedTargetOutput)} ${delaySeconds}초 지연 기동 후보`
+              : `${displayElement(resolvedTargetOutput)} 제어 조건 변경 후보`),
+          targetOutput: resolvedTargetOutput
+        };
+  const candidateLocations = scoreCandidateLocations(project, resolvedTargetOutput, startConditions, stopConditions);
   const patchArtifacts =
     blockedReason === null
       ? selectedVendor === 'siemens'
-        ? createSiemensPatch(normalizedRequirement, targetOutput, startConditions, stopConditions)
+        ? createSiemensPatch(normalizedRequirement, resolvedTargetOutput, startConditions, stopConditions)
         : circuitDraft
           ? createGxWorks2PatchArtifacts(circuitDraft)
           : createMitsubishiPatch(normalizedRequirement, targetOutput, startConditions, stopConditions, project)
@@ -1055,10 +1084,10 @@ export function createChangePlan({
     affectedElements: [
       {
         kind: 'target-output',
-        name: targetOutput.name || targetOutput.owner || '',
-        address: targetOutput.address || '',
-        confidence: targetOutput.confidence,
-        reason: targetOutput.reason
+        name: resolvedTargetOutput.name || resolvedTargetOutput.owner || '',
+        address: resolvedTargetOutput.address || '',
+        confidence: resolvedTargetOutput.confidence,
+        reason: resolvedTargetOutput.reason
       },
       ...startConditions.map((condition) => ({
         kind: 'start-condition',
@@ -1092,7 +1121,7 @@ export function createChangePlan({
     candidateFiles,
     beforeAfterDiff: [
       {
-        area: displayElement(targetOutput),
+        area: displayElement(resolvedTargetOutput),
         before: '기존 로직의 직접 출력 조건 또는 현재 export 기준 동작을 유지합니다.',
         after:
           delaySeconds > 0

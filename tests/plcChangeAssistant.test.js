@@ -106,6 +106,13 @@ test('createChangePlan builds GX Works2 self-holding circuit drafts from natural
   assert.equal(changePlan.circuitDraft.instructionList.includes('ANI X1'), true);
   assert.equal(changePlan.circuitDraft.instructionList.includes('OUT Y0'), true);
   assert.equal(changePlan.circuitDraft.ladderPreview[0].ascii.includes('HOLD'), true);
+  assert.equal(changePlan.normalizedRequirement.targetOutput.address, 'Y0');
+  assert.equal(changePlan.affectedElements[0].address, 'Y0');
+  assert.equal(changePlan.beforeAfterDiff[0].area, 'Y0');
+  assert.equal(
+    changePlan.candidateFiles.find((file) => file.filename === 'draft.candidate.lst')?.content.includes('LD X0'),
+    true
+  );
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.gxworks2.lst'), true);
 });
 
@@ -123,5 +130,6 @@ test('createChangePlan builds GX Works2 two-floor elevator circuit drafts from n
   assert.equal(changePlan.circuitDraft.instructionList.includes('OUT Y0'), true);
   assert.equal(changePlan.circuitDraft.instructionList.includes('OUT Y1'), true);
   assert.equal(changePlan.circuitDraft.ladderPreview.some((network) => network.ascii.includes('2F CALL')), true);
+  assert.equal(changePlan.normalizedRequirement.targetOutput.address, 'Y0, Y1, Y2');
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.gxworks2.lst'), true);
 });

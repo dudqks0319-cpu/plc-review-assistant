@@ -1,7 +1,41 @@
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import readline from 'node:readline';
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const REQUIREMENT_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'targetBehavior',
+    'targetOutput',
+    'delaySeconds',
+    'startConditions',
+    'stopConditions',
+    'priorityRules',
+    'safetyNotes',
+    'uncertainties'
+  ],
+  properties: {
+    targetBehavior: { type: 'string' },
+    targetOutput: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'address', 'confidence'],
+      properties: {
+        name: { type: 'string' },
+        address: { type: 'string' },
+        confidence: { type: 'number', minimum: 0, maximum: 1 }
+      }
+    },
+    delaySeconds: { type: 'number', minimum: 0 },
+    startConditions: { type: 'array', items: { type: 'string' } },
+    stopConditions: { type: 'array', items: { type: 'string' } },
+    priorityRules: { type: 'array', items: { type: 'string' } },
+    safetyNotes: { type: 'array', items: { type: 'string' } },
+    uncertainties: { type: 'array', items: { type: 'string' } }
+  }
+};
 
 function parseJsonBlock(text) {
   const trimmed = String(text || '').trim();
@@ -18,6 +52,22 @@ function parseJsonBlock(text) {
   }
 
   return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
+}
+
+function agentMessageText(item) {
+  return item?.type === 'agentMessage' && typeof item.text === 'string' ? item.text : '';
+}
+
+export function extractCompletedAgentMessage(message) {
+  if (message?.method === 'item/completed') {
+    return agentMessageText(message.params?.item);
+  }
+
+  if (message?.method === 'turn/completed') {
+    return (message.params?.turn?.items || []).map(agentMessageText).filter(Boolean).join('\n');
+  }
+
+  return '';
 }
 
 function buildPrompt({ requestText, vendor, analysis }) {
@@ -65,6 +115,7 @@ export async function normalizeRequirementWithCodexAppServer({ analysis, vendor,
     const rl = readline.createInterface({ input: proc.stdout });
     const stderrChunks = [];
     const deltas = [];
+    const completedMessages = [];
     let nextId = 0;
     let threadId = null;
     let settled = false;
@@ -119,7 +170,11 @@ export async function normalizeRequirementWithCodexAppServer({ analysis, vendor,
         send('initialized');
         send(
           'thread/start',
-          env.PLC_CODEX_MODEL ? { model: env.PLC_CODEX_MODEL } : {},
+          {
+            ...(env.PLC_CODEX_MODEL ? { model: env.PLC_CODEX_MODEL } : {}),
+            cwd: env.PLC_CODEX_WORKDIR || tmpdir(),
+            ephemeral: true
+          },
           ++nextId
         );
         return;
@@ -131,7 +186,9 @@ export async function normalizeRequirementWithCodexAppServer({ analysis, vendor,
           'turn/start',
           {
             threadId,
-            input: [{ type: 'text', text: buildPrompt({ analysis, vendor, requestText }) }]
+            input: [{ type: 'text', text: buildPrompt({ analysis, vendor, requestText }) }],
+            effort: env.PLC_CODEX_REASONING_EFFORT || 'low',
+            outputSchema: REQUIREMENT_OUTPUT_SCHEMA
           },
           ++nextId
         );
@@ -143,9 +200,24 @@ export async function normalizeRequirementWithCodexAppServer({ analysis, vendor,
         return;
       }
 
+      if (message.method === 'item/completed') {
+        const completedMessage = extractCompletedAgentMessage(message);
+        if (completedMessage) {
+          completedMessages.push(completedMessage);
+        }
+        return;
+      }
+
       if (message.method === 'turn/completed') {
         try {
-          const parsed = parseJsonBlock(deltas.join(''));
+          const turn = message.params?.turn;
+          if (turn?.status === 'failed') {
+            finish(new Error(turn.error?.message || 'Codex app-server turn failed'));
+            return;
+          }
+
+          const completedMessage = extractCompletedAgentMessage(message) || completedMessages.join('\n');
+          const parsed = parseJsonBlock(deltas.join('') || completedMessage);
           if (!parsed) {
             finish(new Error('Codex app-server did not return JSON'));
             return;

@@ -395,11 +395,15 @@ export function createServer() {
   });
 }
 
-const executedPath = process.argv[1] ? resolve(process.argv[1]) : '';
-if (fileURLToPath(import.meta.url) === executedPath) {
-  const port = Number(process.env.PORT || 4173);
+export function startServer({ port = Number(process.env.PORT || 4173), host = process.env.HOST || '127.0.0.1' } = {}) {
   const server = createServer();
-  server.listen(port, () => {
+  server.listen(port, host, () => {
     console.log(`PLC Review Assistant running on http://localhost:${port}`);
   });
+  return server;
+}
+
+const executedPath = process.argv[1] ? resolve(process.argv[1]) : '';
+if (fileURLToPath(import.meta.url) === executedPath) {
+  startServer();
 }

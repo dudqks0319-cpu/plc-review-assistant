@@ -61,6 +61,14 @@ npm install
 npm start
 ```
 
+Codex app-server 자연어 정규화를 포함해 실행하려면:
+
+```bash
+npm run start:codex
+```
+
+Windows에서는 `start-windows.bat`를 더블 클릭할 수 있습니다. 자세한 내용은 [WINDOWS.md](./WINDOWS.md)를 참고하세요.
+
 Open:
 
 ```text
@@ -115,7 +123,7 @@ Content-Type: application/json
 }
 ```
 
-By default this endpoint returns a deterministic fallback result. Set `PLC_CODEX_REQUIREMENT_NORMALIZER=app-server` on the server to let the backend try `codex app-server` first. Codex output is treated only as a requirement-normalization hint and is always passed through deterministic safety validation before patch candidates are generated.
+`npm start`는 결정론적 fallback을 사용하고, `npm run start:codex`는 `codex app-server`를 먼저 시도합니다. Codex output is treated only as a requirement-normalization hint and is always passed through deterministic safety validation before patch candidates are generated.
 
 Create a circuit-change plan:
 
@@ -173,7 +181,9 @@ Create a local `.env` from `.env.example` or set environment variables directly:
 ```bash
 export PLC_CODEX_REQUIREMENT_NORMALIZER=app-server
 export PLC_CODEX_BIN=codex
-export PLC_CODEX_TIMEOUT_MS=20000
+export PLC_CODEX_MODEL=gpt-5.5
+export PLC_CODEX_REASONING_EFFORT=low
+export PLC_CODEX_TIMEOUT_MS=60000
 ```
 
 Use a Codex access token only on trusted server-side runners:
