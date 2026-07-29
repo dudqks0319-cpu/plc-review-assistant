@@ -7,6 +7,7 @@ import {
   calculateTimerDuration,
   getCpuProfile
 } from '../adapters/mitsubishi/deviceAddress.js';
+import { buildChangeCandidateV2 } from '../application/changeCandidateV2.js';
 
 const HIGH_RISK_MACHINE_PROFILES = [
   {
@@ -38,6 +39,21 @@ const HIGH_RISK_MACHINE_PROFILES = [
     id: 'mobile-equipment',
     label: '무인 운반 장비',
     keywords: ['agv', 'amr', '무인운반', '무인 운반']
+  },
+  {
+    id: 'brake-axis',
+    label: '브레이크/축 제어',
+    keywords: ['브레이크 해제', '브레이크', '축 제어', 'brake release', 'axis control']
+  },
+  {
+    id: 'servo-motion',
+    label: '서보/모션 제어',
+    keywords: ['서보', '모션', 'servo', 'motion']
+  },
+  {
+    id: 'safety-motion',
+    label: '안전 모션 기능',
+    keywords: ['sto', 'ss1', 'sls', 'safe torque off', 'safe stop 1', 'safely-limited speed']
   }
 ];
 
@@ -66,11 +82,20 @@ function safeFilename(value, fallback = 'plc-program') {
   return base || fallback;
 }
 
+function matchesHighRiskKeyword(text, keyword) {
+  const normalizedKeyword = keyword.toLowerCase();
+  if (['sto', 'ss1', 'sls'].includes(normalizedKeyword)) {
+    return new RegExp(`\\b${normalizedKeyword}\\b`, 'i').test(text);
+  }
+
+  return text.includes(normalizedKeyword);
+}
+
 function detectHighRiskMachine(requestText) {
   const normalized = safeString(requestText, '', 4000).toLowerCase().replace(/\s+/g, ' ');
   return (
     HIGH_RISK_MACHINE_PROFILES.find((profile) =>
-      profile.keywords.some((keyword) => normalized.includes(keyword.toLowerCase()))
+      profile.keywords.some((keyword) => matchesHighRiskKeyword(normalized, keyword))
     ) || null
   );
 }
@@ -313,11 +338,59 @@ function createPlanJson(plan) {
       simulation: plan.simulation,
       timerValidation: plan.timerValidation,
       circuitDraft: plan.circuitDraft,
+      changeCandidateV2: plan.changeCandidateV2,
       warnings: plan.warnings
     },
     null,
     2
   );
+}
+
+function createTestScenarioJson(plan) {
+  return JSON.stringify(
+    {
+      riskClass: plan.riskClass,
+      executionScope: plan.executionScope,
+      template: plan.changeCandidateV2?.template || null,
+      testCases: plan.testCases || [],
+      invariants: plan.changeCandidateV2?.logicIr?.invariants || [],
+      simulation: plan.simulation
+    },
+    null,
+    2
+  );
+}
+
+function createReviewReport(plan) {
+  const conflicts = plan.changeCandidateV2?.impactAnalysis?.conflicts || [];
+  const reasons = plan.changeCandidateV2?.validation?.reviewReasons || [];
+  return [
+    '# PLC 변경 후보 검토 보고서',
+    '',
+    '이 결과는 검토용 후보입니다.',
+    '실제 PLC 반영 전 원본 백업, CPU·주소 확인, 프로그램 체크,',
+    '벤더 시뮬레이션, 현장 표준 테스트, 자격 있는 담당자 승인이 필요합니다.',
+    '',
+    `- Risk Class: ${plan.riskClass || 'Unknown'}`,
+    `- 실행 범위: ${plan.executionScope}`,
+    `- Template: ${plan.changeCandidateV2?.template?.label || '확인 필요'}`,
+    `- PLC 직접 쓰기: ${plan.readiness?.canWriteToPlc ? '허용' : '허용하지 않음'}`,
+    '',
+    '## 영향·충돌',
+    ...(conflicts.length
+      ? conflicts.map(
+          (conflict) =>
+            `- ${conflict.code}: ${conflict.address || '-'} · ${conflict.detail}`
+        )
+      : ['- 현재 Export 범위에서 등록된 충돌 없음']),
+    '',
+    '## 추가 확인',
+    ...(reasons.length ? reasons.map((reason) => `- ${reason}`) : ['- 없음']),
+    '',
+    '## 승인',
+    ...(plan.approvalsRequired || []).map((approval) => `- ${approval}`),
+    ''
+  ].join('\n');
 }
 
 function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFilename }) {
@@ -331,6 +404,8 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
   const hasSource = safeString(sourceContent).length > 0 && analysis?.project?.source?.fileType !== 'natural-language-draft';
   const files = [];
   const timerUnknown = plan.timerValidation?.status === 'unknown';
+  const canEmitInstruction =
+    plan.changeCandidateV2?.policy?.canEmitInstructionCandidate !== false;
 
   if (timerUnknown) {
     // A review record is still useful, but no instruction, CSV, diff, or simulator
@@ -343,7 +418,7 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
       mimeType: 'text/plain; charset=utf-8',
       content: formatCircuitDraft(plan.circuitDraft, { simulationOnly: true })
     });
-  } else {
+  } else if (canEmitInstruction) {
     const primaryPatch =
       vendor === 'siemens'
         ? findArtifact(plan, ['SCL'])
@@ -401,6 +476,20 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
     label: '변경 계획 JSON',
     mimeType: 'application/json; charset=utf-8',
     content: createPlanJson(plan)
+  });
+  files.push({
+    id: makeId('file', baseName, vendor, 'tests'),
+    filename: `${baseName}.test-scenarios.json`,
+    label: '자동 검토 시나리오',
+    mimeType: 'application/json; charset=utf-8',
+    content: createTestScenarioJson(plan)
+  });
+  files.push({
+    id: makeId('file', baseName, vendor, 'review'),
+    filename: `${baseName}.review-report.md`,
+    label: '검토 보고서',
+    mimeType: 'text/markdown; charset=utf-8',
+    content: createReviewReport(plan)
   });
 
   return files;
@@ -548,8 +637,72 @@ export function createChangePlan(options) {
                 : '자연어 요구사항을 바탕으로 검토용 신규 회로 초안을 생성했습니다.'
             }
           ]
-        : basePlan.beforeAfterDiff
+      : basePlan.beforeAfterDiff
   };
+
+  const changeCandidateV2 = buildChangeCandidateV2({
+    analysis: options?.analysis,
+    plan,
+    requestText,
+    sourceContent: options?.sourceContent || '',
+    highRiskMachine
+  });
+  plan.changeCandidateV2 = changeCandidateV2;
+  plan.riskClass = changeCandidateV2.risk.class;
+
+  if (changeCandidateV2.status === 'candidate') {
+    plan.executionScope = changeCandidateV2.risk.scope;
+  } else if (
+    changeCandidateV2.status === 'needs-review' &&
+    !timerUnknown &&
+    !['blocked', 'simulation-only'].includes(plan.executionScope)
+  ) {
+    plan.executionScope = 'review-only';
+    if (changeCandidateV2.logicIr.networks.length === 0) {
+      plan.circuitDraft = null;
+    }
+    plan.recommendedPatch = {
+      ...plan.recommendedPatch,
+      status: 'needs-verification',
+      title: '근거와 충돌 확인 필요',
+      summary:
+        '필수 신호, 지원 Template, Writer 위치 또는 주소 충돌을 확인하기 전에는 명령 후보를 생성하지 않습니다.',
+      patchArtifacts: []
+    };
+    if (plan.simulation?.result !== 'not-run') {
+      plan.simulation = {
+        result: 'not-run',
+        harness: 'not-run',
+        reason: changeCandidateV2.validation.reviewReasons.join(', '),
+        timerPresetSeconds: null,
+        timeline: [],
+        truthTable: []
+      };
+    }
+    plan.testCases = [];
+    plan.readiness = {
+      ...plan.readiness,
+      level: 'needs-evidence',
+      summary:
+        '현재 Export 근거만으로 안전한 변경 후보를 만들 수 없어 검토 기록만 제공합니다.',
+      checks: plan.readiness.checks.map((check) =>
+        check.id === 'addresses'
+          ? {
+              ...check,
+              status: changeCandidateV2.impactAnalysis.conflicts.some(
+                (conflict) => conflict.severity === 'must-review'
+              )
+                ? 'conflict'
+                : 'unknown',
+              detail:
+                changeCandidateV2.impactAnalysis.conflicts
+                  .map((conflict) => conflict.detail)
+                  .join(' ') || '필수 신호와 정확한 Writer 위치를 추가로 확인해야 합니다.'
+            }
+          : check
+      )
+    };
+  }
 
   plan.candidateFiles = createCandidateFiles({
     plan,

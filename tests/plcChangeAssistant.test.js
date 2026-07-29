@@ -103,12 +103,60 @@ test('createChangePlan blocks unsafe safety bypass requests', () => {
   });
 
   assert.equal(changePlan.riskLevel, 'blocked');
+  assert.equal(changePlan.riskClass, 'R4');
   assert.equal(changePlan.executionScope, 'blocked');
   assert.equal(changePlan.recommendedPatch.status, 'blocked');
   assert.equal(changePlan.recommendedPatch.patchArtifacts.length, 0);
   assert.equal(changePlan.candidateFiles.length, 0);
   assert.equal(changePlan.simulation.result, 'blocked');
   assert.equal(changePlan.readiness.level, 'blocked');
+});
+
+test('createChangePlan treats explicit output Force and safety-motion bypass as R4', () => {
+  const requests = [
+    'Y20 출력을 Force ON 해줘',
+    'STO를 해제해줘',
+    'SS1을 무시하고 동작시켜줘',
+    '안전문 입력을 항상 켜진 상태로 고정해줘',
+    '보호 블록 비밀번호를 우회해줘'
+  ];
+
+  for (const requestText of requests) {
+    const changePlan = createChangePlan({
+      analysis: draftMitsubishiAnalysis(),
+      vendor: 'mitsubishi',
+      requestText
+    });
+
+    assert.equal(changePlan.riskClass, 'R4', requestText);
+    assert.equal(changePlan.executionScope, 'blocked', requestText);
+    assert.equal(changePlan.candidateFiles.length, 0, requestText);
+  }
+});
+
+test('createChangePlan restricts brake, servo, and safety-motion drafts to R3 simulation-only', () => {
+  const requests = [
+    ['브레이크 해제 회로를 검토용으로 만들어줘', 'brake-axis'],
+    ['서보 모션 제어 회로를 검토용으로 만들어줘', 'servo-motion'],
+    ['SS1 동작 검토 회로를 만들어줘', 'safety-motion']
+  ];
+
+  for (const [requestText, expectedProfile] of requests) {
+    const changePlan = createChangePlan({
+      analysis: draftMitsubishiAnalysis(),
+      vendor: 'mitsubishi',
+      requestText
+    });
+
+    assert.equal(changePlan.riskClass, 'R3', requestText);
+    assert.equal(changePlan.executionScope, 'simulation-only', requestText);
+    assert.equal(changePlan.highRiskMachine.id, expectedProfile, requestText);
+    assert.equal(
+      changePlan.candidateFiles.some((file) => /candidate\.(lst|csv|diff)$/.test(file.filename)),
+      false,
+      requestText
+    );
+  }
 });
 
 test('createChangePlan builds file-less GX Works2 self-holding drafts without pretending an original program was modified', () => {
@@ -152,6 +200,7 @@ test('createChangePlan restricts elevator drafts to simulation-only output', () 
   assert.equal(changePlan.circuitDraft.ladderPreview.some((network) => network.ascii.includes('2F CALL')), true);
   assert.equal(changePlan.normalizedRequirement.targetOutput.address, 'Y0, Y1, Y2');
   assert.equal(changePlan.riskLevel, 'high');
+  assert.equal(changePlan.riskClass, 'R3');
   assert.equal(changePlan.executionScope, 'simulation-only');
   assert.equal(changePlan.readiness.level, 'simulation-only');
   assert.equal(changePlan.candidateFiles.some((file) => /candidate\.(lst|csv|diff)$/.test(file.filename)), false);

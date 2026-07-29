@@ -52,6 +52,14 @@ test('review UI explains unverified timer profiles instead of presenting executa
   assert.match(appJs, /CPU·타이머 기준/);
 });
 
+test('change review UI shows Phase 7 risk class, template, Logic IR, and conflicts', () => {
+  assert.match(appJs, /위험 등급/);
+  assert.match(appJs, /Template ·/);
+  assert.match(appJs, /Logic IR·영향 검토/);
+  assert.match(appJs, /Writer·주소 충돌/);
+  assert.match(appJs, /canEmitInstructionCandidate/);
+});
+
 test('grounded question UI exposes recommended questions, confidence, evidence, and original source navigation', () => {
   const examples = indexHtml.match(/data-question-example=/g) || [];
 

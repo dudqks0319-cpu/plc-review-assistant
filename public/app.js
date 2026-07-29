@@ -451,8 +451,21 @@ function renderChangePlan(changePlan) {
 
   const overview = createElement('article', 'result-card overview-card');
   const meta = createElement('div', 'result-meta');
-  meta.append(createElement('span', `risk-chip risk-${changePlan.riskLevel}`, `위험도 ${changePlan.riskLevel}`));
+  meta.append(
+    createElement(
+      'span',
+      `risk-chip risk-${changePlan.riskLevel}`,
+      changePlan.riskClass
+        ? `위험 등급 ${changePlan.riskClass}`
+        : `위험도 ${changePlan.riskLevel}`
+    )
+  );
   meta.append(createElement('span', '', changePlan.vendor === 'mitsubishi' ? 'GX Works2' : 'Siemens'));
+  if (changePlan.changeCandidateV2?.template) {
+    meta.append(
+      createElement('span', '', `Template · ${changePlan.changeCandidateV2.template.label}`)
+    );
+  }
   meta.append(
     createElement(
       'span',
@@ -500,6 +513,55 @@ function renderChangePlan(changePlan) {
   behavior.append(checks);
   overview.append(behavior);
   panel.append(overview);
+
+  if (changePlan.changeCandidateV2) {
+    const candidate = changePlan.changeCandidateV2;
+    const impact = createElement('article', 'result-card impact-card');
+    impact.append(createElement('h3', '', 'Logic IR·영향 검토'));
+    impact.append(
+      createElement(
+        'p',
+        'card-lead',
+        candidate.validation.instructionEmissionAllowed
+          ? '필수 신호와 충돌 검사를 통과해 검토용 명령 후보를 만들었습니다.'
+          : '근거 또는 충돌 확인이 남아 명령 후보는 만들지 않고 검토 기록만 제공합니다.'
+      )
+    );
+    const impactMeta = createElement('div', 'summary-grid');
+    [
+      ['Template', candidate.template?.label || '확인 필요'],
+      ['Logic IR', candidate.logicIr?.version || '없음'],
+      ['대상 출력', candidate.impactAnalysis?.targetAddresses?.join(', ') || '확인 필요'],
+      ['명령 후보', candidate.policy?.canEmitInstructionCandidate ? '생성 가능' : '보류']
+    ].forEach(([label, value]) => {
+      const item = createElement('div');
+      item.append(createElement('span', '', label));
+      item.append(createElement('strong', '', value));
+      impactMeta.append(item);
+    });
+    impact.append(impactMeta);
+
+    const conflicts = candidate.impactAnalysis?.conflicts || [];
+    if (conflicts.length) {
+      const conflictBox = createElement('div', 'warning-box');
+      conflictBox.append(createElement('h4', '', 'Writer·주소 충돌'));
+      appendList(
+        conflictBox,
+        conflicts.map(
+          (conflict) =>
+            `${conflict.address || '주소 확인 필요'} · ${conflict.detail}`
+        ),
+        'warning-list'
+      );
+      impact.append(conflictBox);
+    }
+    const reviewReasons = candidate.validation?.reviewReasons || [];
+    if (reviewReasons.length) {
+      impact.append(createElement('h4', '', '추가 확인 항목'));
+      appendList(impact, reviewReasons);
+    }
+    panel.append(impact);
+  }
 
   if (changePlan.circuitDraft) {
     panel.append(renderCircuitDraft(changePlan.circuitDraft));

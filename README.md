@@ -50,6 +50,11 @@ Explicitly out of scope:
 - Generates a Korean rule-based review summary from deterministic analysis data
 - Optionally uses server-side Codex app-server normalization for ambiguous natural-language change requests
 - Converts a natural-language change request into a structured change plan
+- Classifies change work as R1 draft, R2 existing-project candidate, R3 simulation-only, or R4 blocked
+- Selects from eight low-risk Phase 7 templates before any instruction candidate is emitted
+- Builds a vendor-neutral `LogicCandidate` with signals, candidate networks, timers, assumptions, and MUST invariants
+- Finds existing target writers and allocated internal/timer address conflicts from the current snapshot
+- Holds instruction, diff, and CSV output when the template, required facts, timer profile, or writer state is unresolved
 - Can generate a file-less natural-language draft plan when no PLC export has been uploaded
 - Generates GX Works2-oriented ladder instruction drafts and visible ladder previews for basic natural-language requests such as self-holding circuits and simple two-floor elevator training circuits
 - Finds target output, start conditions, stop/interlock candidates, and likely affected blocks
@@ -262,6 +267,12 @@ The response includes:
 - GX Works2 circuit preview when the request is a supported natural-language draft
 - downloadable candidate files
 - required approvals and warnings
+- Phase 7 `changeCandidateV2` data:
+  - selected low-risk template
+  - neutral Logic IR
+  - R1–R4 risk class and permitted scope
+  - existing Writer and address-allocation conflicts
+  - instruction-emission policy and review reasons
 
 For early ideation, `analysis`, `sourceFilename`, and `sourceContent` may be omitted. In that mode the server creates a `natural-language-draft` context and returns a draft candidate only. It cannot check existing tags, addresses, blocks, or collisions until a real vendor export is uploaded.
 
@@ -277,6 +288,19 @@ For an uploaded Mitsubishi export, the app may use
 `.instruction-candidate.txt`, `.before-after.diff`, and `.review-list.csv`.
 These are engineering review artifacts only; they are not verified GX Works2
 import formats.
+
+Every non-blocked plan also records:
+
+- `.logic-draft.json` or `.change-proposal.json`
+- `.test-scenarios.json`
+- `.review-report.md`
+
+The first Phase 7 template library recognizes self-holding, start/stop,
+delay-ON, delay-OFF, rising/falling one-shot, alarm latch/reset, two-output
+mutual interlock, and sensor debounce requests. GX Works2 instruction rendering
+is currently enabled only for self-holding, start/stop, and delay-ON when all
+required facts are grounded. The other templates remain Logic-IR-only and do
+not emit a Mitsubishi instruction candidate yet.
 
 Mitsubishi timed requests are fail-closed. If the exact CPU model, timer
 device number, instruction, and time base are not backed by a verified timer

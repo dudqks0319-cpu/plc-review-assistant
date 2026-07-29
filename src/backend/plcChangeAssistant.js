@@ -175,6 +175,28 @@ function scoreElementForRequest(element, requestText, keywords) {
   return score;
 }
 
+function nearestKeywordDistance(requestText, element, keywords) {
+  const request = lower(requestText);
+  const identifiers = [element?.address, element?.name, element?.owner]
+    .map((value) => lower(value))
+    .filter(Boolean);
+  let nearest = Number.POSITIVE_INFINITY;
+  for (const identifier of identifiers) {
+    let index = request.indexOf(identifier);
+    while (index >= 0) {
+      for (const keyword of keywords) {
+        let keywordIndex = request.indexOf(keyword.toLowerCase());
+        while (keywordIndex >= 0) {
+          nearest = Math.min(nearest, Math.abs(keywordIndex - index));
+          keywordIndex = request.indexOf(keyword.toLowerCase(), keywordIndex + 1);
+        }
+      }
+      index = request.indexOf(identifier, index + identifier.length);
+    }
+  }
+  return nearest;
+}
+
 function findTargetOutput(project, requestText) {
   const outputs = allElements(project).filter(isOutputElement);
   const scored = outputs
@@ -201,15 +223,42 @@ function findTargetOutput(project, requestText) {
   };
 }
 
-function findConditionElements(project, requestText, kind) {
+function findConditionElements(project, requestText, kind, excludedAddresses = []) {
   const keywords = kind === 'stop' ? STOP_KEYWORDS : START_KEYWORDS;
+  const oppositeKeywords = kind === 'stop' ? START_KEYWORDS : STOP_KEYWORDS;
+  const excluded = new Set(excludedAddresses.filter(Boolean).map((address) => lower(address)));
+  const requestHasCategory = includesAny(requestText, keywords);
   const elements = allElements(project)
-    .filter((element) => (kind === 'stop' ? true : isInputElement(element)))
-    .map((element) => ({
-      element,
-      score: scoreElementForRequest(element, requestText, keywords)
-    }))
-    .filter((item) => item.score > 0)
+    .filter(
+      (element) =>
+        !excluded.has(lower(element.address)) &&
+        !isOutputElement(element) &&
+        (kind === 'stop' || isInputElement(element))
+    )
+    .map((element) => {
+      const labelText = `${element.name || ''} ${element.comment || ''} ${element.owner || ''}`;
+      const semanticLabel = includesAny(labelText, keywords);
+      const categoryDistance = nearestKeywordDistance(
+        requestText,
+        element,
+        keywords
+      );
+      const oppositeDistance = nearestKeywordDistance(
+        requestText,
+        element,
+        oppositeKeywords
+      );
+      const contextualMention =
+        categoryDistance <= 32 && categoryDistance < oppositeDistance;
+      return {
+        element,
+        score: scoreElementForRequest(element, requestText, keywords),
+        eligible:
+          contextualMention ||
+          (semanticLabel && (kind === 'stop' || requestHasCategory))
+      };
+    })
+    .filter((item) => item.eligible && item.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
     .map((item) => ({
@@ -221,8 +270,17 @@ function findConditionElements(project, requestText, kind) {
     return elements;
   }
 
+  if (kind === 'start' && !requestHasCategory) {
+    return [];
+  }
+
   return allElements(project)
-    .filter((element) => (kind === 'stop' ? includesAny(`${element.name} ${element.comment}`, STOP_KEYWORDS) : isInputElement(element)))
+    .filter(
+      (element) =>
+        !excluded.has(lower(element.address)) &&
+        !isOutputElement(element) &&
+        includesAny(`${element.name} ${element.comment}`, keywords)
+    )
     .slice(0, 3)
     .map((element) => ({ ...element, confidence: 0.35 }));
 }
@@ -592,7 +650,9 @@ function createDelayedOutputDraft({ requirement, requestText, targetOutput, star
     ioMap: makeIoMap([
       [start, 'Start/Detect', '기동 또는 감지 입력', 'NO'],
       [stop, 'Stop/Interlock', '정지 또는 인터락 입력', 'NC logic by ANI'],
-      [timerDevice, 'Delay Timer', `${delay || 1}초 지연 타이머`, 'timer'],
+      ...(delay > 0
+        ? [[timerDevice, 'Delay Timer', `${delay}초 지연 타이머`, 'timer']]
+        : []),
       [output, 'Target Output', '대상 출력', 'coil']
     ]),
     instructionList,
@@ -994,8 +1054,8 @@ export function createChangePlan({
   }
 
   const targetOutput = mergeTargetOutput(findTargetOutput(project, request), normalizedRequirementInput?.targetOutput);
-  const startConditions = findConditionElements(project, request, 'start');
-  const stopConditions = findConditionElements(project, request, 'stop');
+  const startConditions = findConditionElements(project, request, 'start', [targetOutput.address]);
+  const stopConditions = findConditionElements(project, request, 'stop', [targetOutput.address]);
   const delaySeconds = Number(normalizedRequirementInput?.delaySeconds || 0) || extractDelaySeconds(request);
   const safetyReasons = Array.isArray(safetyValidation?.reasons) ? safetyValidation.reasons : [];
   const blockedReason = unsafeModificationRequested(request)

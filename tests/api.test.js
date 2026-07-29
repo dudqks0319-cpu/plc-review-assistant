@@ -8,6 +8,7 @@ const sampleXml = `<?xml version="1.0"?>
   <SW.Blocks.OB Name="MainCycle" ProgrammingLanguage="LAD" />
   <SW.Blocks.FB Name="PumpControl" ProgrammingLanguage="LAD">
     <Member Name="PumpStart" Datatype="Bool" Address="%I1.0" Comment="Pump start" />
+    <Member Name="PumpStop" Datatype="Bool" Address="%I1.1" Comment="Pump stop" />
     <Member Name="PumpRun" Datatype="Bool" Address="%Q1.0" />
   </SW.Blocks.FB>
 </Document>`;

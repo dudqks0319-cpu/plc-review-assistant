@@ -262,3 +262,97 @@ export interface KnowledgeDocument {
   storage: 'memory-only';
   createdAt: string;
 }
+
+export type ChangeTemplateId =
+  | 'self-holding'
+  | 'start-stop'
+  | 'delay-on'
+  | 'delay-off'
+  | 'edge-one-shot'
+  | 'alarm-latch-reset'
+  | 'mutual-interlock'
+  | 'sensor-debounce';
+
+export type RiskClass = 'R0' | 'R1' | 'R2' | 'R3' | 'R4';
+
+export interface CandidateSignal {
+  id: string;
+  address: string | null;
+  name: string;
+  role: 'input' | 'output' | 'internal' | 'timer';
+  evidence: 'candidate-assumption';
+}
+
+export interface LogicInvariant {
+  id: string;
+  expression: string;
+  severity: 'must' | 'should';
+}
+
+export interface LogicCandidate {
+  version: 'logic-candidate-v2';
+  templateId: ChangeTemplateId | null;
+  networks: Array<{
+    id: string;
+    name: string;
+    intent: string;
+    operations: Array<{ id: string; expression: string; evidence: 'candidate' }>;
+    sourceAnchors: SourceAnchor[];
+  }>;
+  inputs: CandidateSignal[];
+  outputs: CandidateSignal[];
+  internals: CandidateSignal[];
+  timers: Array<CandidateSignal & {
+    durationSeconds: number | null;
+    timeBaseVerified: boolean;
+  }>;
+  invariants: LogicInvariant[];
+  assumptions: string[];
+  writesToPlc: false;
+}
+
+export interface ChangeCandidateV2 {
+  version: 'change-candidate-v2';
+  status: 'candidate' | 'needs-review' | 'simulation-only' | 'blocked';
+  template: {
+    id: ChangeTemplateId;
+    label: string;
+    requiredFacts: string[];
+    renderer: 'gxworks2' | 'logic-ir-only';
+  } | null;
+  logicIr: LogicCandidate;
+  impactAnalysis: {
+    targetAddresses: string[];
+    existingWriters: Array<{
+      address: string;
+      writerCount: number;
+      writers: Array<{
+        id: string;
+        access: DeviceReference['access'];
+        source: Partial<SourceAnchor>;
+      }>;
+    }>;
+    conflicts: Array<{
+      code: 'EXISTING_WRITER_REVIEW' | 'DUPLICATE_WRITER_CONFLICT' | 'ADDRESS_ALLOCATION_CONFLICT';
+      severity: 'review' | 'must-review';
+      address: string;
+      detail: string;
+    }>;
+  };
+  validation: {
+    status: ChangeCandidateV2['status'];
+    missingFacts: string[];
+    reviewReasons: string[];
+    instructionEmissionAllowed: boolean;
+  };
+  risk: {
+    class: RiskClass;
+    scope: 'blocked' | 'simulation-only' | 'engineering-candidate' | 'draft-candidate';
+    highRiskMachine: string | null;
+  };
+  policy: {
+    canWriteToPlc: false;
+    canEmitInstructionCandidate: boolean;
+    externalNetworkUsed: false;
+  };
+}
