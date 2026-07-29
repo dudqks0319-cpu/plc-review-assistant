@@ -279,8 +279,13 @@ For early ideation, `analysis`, `sourceFilename`, and `sourceContent` may be omi
 Supported file-less GX Works2 draft examples:
 
 - `자기유지회로 만들어줘`
-- `2층 엘리베이터 회로 만들어줘`
 - `제품 감지 후 컨베이어 모터를 3초 뒤 켜줘`
+- `시작 입력이 꺼진 뒤 3초 지연 OFF 해줘`
+- `상승 엣지 one-shot 출력을 만들어줘`
+- `알람을 래치하고 Reset으로 복귀해줘`
+- `두 출력 상호 인터락 회로를 만들어줘`
+- `센서 Debounce 회로를 만들어줘`
+- `2층 엘리베이터 교육용 회로 만들어줘` (`R3`, simulation-only)
 
 Requests that do not need a timer can produce a visible I/O map, ASCII ladder
 preview, a downloadable `.instruction-draft.txt`, and a `.logic-draft.json`.
@@ -297,10 +302,10 @@ Every non-blocked plan also records:
 
 The first Phase 7 template library recognizes self-holding, start/stop,
 delay-ON, delay-OFF, rising/falling one-shot, alarm latch/reset, two-output
-mutual interlock, and sensor debounce requests. GX Works2 instruction rendering
-is currently enabled only for self-holding, start/stop, and delay-ON when all
-required facts are grounded. The other templates remain Logic-IR-only and do
-not emit a Mitsubishi instruction candidate yet.
+mutual interlock, and sensor debounce requests. All eight have GX Works2
+review renderers and template-specific `not-run` test scenarios. Instruction
+output remains fail-closed when required facts, a timed CPU profile, Writer
+state, or an input/output allocation cannot be verified.
 
 Mitsubishi timed requests are fail-closed. If the exact CPU model, timer
 device number, instruction, and time base are not backed by a verified timer

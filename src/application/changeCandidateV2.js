@@ -30,35 +30,35 @@ export const LOW_RISK_TEMPLATE_LIBRARY = Object.freeze([
     label: '지연 OFF',
     match: /지연\s*(?:off|오프)|delay[-_ ]?off|(?:\d+(?:\.\d+)?\s*초).{0,30}(?:뒤|후).{0,20}(?:꺼|off)/i,
     requiredFacts: ['start', 'stop', 'output', 'duration'],
-    renderer: 'logic-ir-only'
+    renderer: 'gxworks2'
   },
   {
     id: 'edge-one-shot',
     label: 'Rising/Falling one-shot',
     match: /one[-_ ]?shot|원\s*샷|상승\s*(?:엣지|edge)|하강\s*(?:엣지|edge)|rising|falling/i,
     requiredFacts: ['trigger', 'output', 'edge'],
-    renderer: 'logic-ir-only'
+    renderer: 'gxworks2'
   },
   {
     id: 'alarm-latch-reset',
     label: 'Alarm Latch + Reset',
     match: /(?:alarm|알람|경보).{0,40}(?:latch|래치|유지|reset|리셋|복귀)/i,
     requiredFacts: ['alarm', 'reset', 'output'],
-    renderer: 'logic-ir-only'
+    renderer: 'gxworks2'
   },
   {
     id: 'mutual-interlock',
     label: '두 출력 상호 인터락',
     match: /상호\s*인터락|상호\s*연동|mutual\s*interlock|두\s*출력.{0,20}(?:동시|인터락)/i,
     requiredFacts: ['enable', 'two-outputs'],
-    renderer: 'logic-ir-only'
+    renderer: 'gxworks2'
   },
   {
     id: 'sensor-debounce',
     label: '센서 Debounce',
     match: /debounce|디바운스|채터링|센서.{0,30}(?:흔들|노이즈|안정)/i,
     requiredFacts: ['sensor', 'output', 'duration'],
-    renderer: 'logic-ir-only'
+    renderer: 'gxworks2'
   }
 ]);
 
@@ -88,7 +88,12 @@ function fallbackTemplate(circuitDraft) {
   const byCircuit = {
     'self-holding': 'self-holding',
     'output-control': 'start-stop',
-    'delayed-output': 'delay-on'
+    'delayed-output': 'delay-on',
+    'delay-off': 'delay-off',
+    'edge-one-shot': 'edge-one-shot',
+    'alarm-latch-reset': 'alarm-latch-reset',
+    'mutual-interlock': 'mutual-interlock',
+    'sensor-debounce': 'sensor-debounce'
   };
   return LOW_RISK_TEMPLATE_LIBRARY.find(
     (template) => template.id === byCircuit[circuitDraft?.circuitType]
@@ -103,12 +108,12 @@ export function selectLowRiskTemplate(
   const request = text(requestText);
   const priority = [
     'self-holding',
-    'delay-off',
-    'delay-on',
     'edge-one-shot',
     'alarm-latch-reset',
     'mutual-interlock',
     'sensor-debounce',
+    'delay-off',
+    'delay-on',
     'start-stop'
   ];
   const matched = priority
@@ -120,9 +125,13 @@ export function selectLowRiskTemplate(
 function signalRole(item) {
   const device = text(item?.device).toUpperCase();
   const role = `${item?.role || ''} ${item?.contact || ''}`.toLowerCase();
-  if (/^Y/.test(device) || role.includes('출력') || role.includes('coil')) return 'output';
-  if (/^T/.test(device) || role.includes('timer') || role.includes('타이머')) return 'timer';
-  if (/^[ML]/.test(device) || role.includes('internal') || role.includes('내부')) return 'internal';
+  if (/^Y/.test(device)) return 'output';
+  if (/^T/.test(device)) return 'timer';
+  if (/^[ML]/.test(device)) return 'internal';
+  if (/^X/.test(device)) return 'input';
+  if (role.includes('출력') || role.includes('coil')) return 'output';
+  if (role.includes('timer') || role.includes('타이머')) return 'timer';
+  if (role.includes('internal') || role.includes('내부')) return 'internal';
   return 'input';
 }
 
@@ -196,7 +205,12 @@ function collectFacts(plan, circuitDraft) {
   return {
     start: [...new Set(start)],
     stop: [...new Set(stop)],
-    outputs: [...new Set([targetIdentity, ...candidateOutputs].filter(Boolean))],
+    outputs: [
+      ...new Set([
+        ...(targetAddresses.length > 0 ? targetAddresses : [targetIdentity]),
+        ...candidateOutputs
+      ].filter(Boolean))
+    ],
     targetAddresses,
     candidateInputs,
     durationSeconds: Number(plan?.normalizedRequirement?.delaySeconds || 0),
@@ -282,7 +296,12 @@ function assessWriters(analysis, targetAddresses) {
   return { byAddress, conflicts };
 }
 
-function assessAllocatedAddresses(analysis, circuitDraft, targetAddresses) {
+function assessAllocatedAddresses(
+  analysis,
+  circuitDraft,
+  targetAddresses,
+  { existingSource = false } = {}
+) {
   const existing = new Set(
     (analysis?.snapshot?.devices || []).map((device) => device?.canonicalAddress).filter(Boolean)
   );
@@ -290,8 +309,19 @@ function assessAllocatedAddresses(analysis, circuitDraft, targetAddresses) {
   for (const item of circuitDraft?.ioMap || []) {
     const device = text(item?.device).toUpperCase();
     const role = signalRole(item);
-    if (!device || targetAddresses.includes(device) || !['timer', 'internal'].includes(role)) continue;
-    if (existing.has(device)) {
+    if (!device) continue;
+    if (existingSource && ['input', 'output'].includes(role) && !existing.has(device)) {
+      conflicts.push({
+        code: 'UNVERIFIED_DEVICE_ADDRESS',
+        severity: 'must-review',
+        address: device,
+        detail: `${device} is not present in the current snapshot and requires an explicit allocation review.`
+      });
+    } else if (
+      !targetAddresses.includes(device) &&
+      ['timer', 'internal'].includes(role) &&
+      existing.has(device)
+    ) {
       conflicts.push({
         code: 'ADDRESS_ALLOCATION_CONFLICT',
         severity: 'must-review',
@@ -347,6 +377,72 @@ function riskPolicy({ blocked, highRiskMachine, existingSource }) {
   return { class: 'R1', scope: 'draft-candidate' };
 }
 
+export function createTemplateTestScenarios(changeCandidate) {
+  const templateId = changeCandidate?.template?.id;
+  const logicIr = changeCandidate?.logicIr || {};
+  const input = logicIr.inputs?.[0]?.address || 'INPUT_A';
+  const secondInput = logicIr.inputs?.[1]?.address || 'INPUT_B';
+  const output = logicIr.outputs?.[0]?.address || 'OUTPUT_A';
+  const secondOutput = logicIr.outputs?.[1]?.address || 'OUTPUT_B';
+  const durationSeconds = logicIr.timers?.[0]?.durationSeconds || 0;
+  const scenario = (name, inputs, expectedOutput, expectedState) => ({
+    id: stableId('scenario', templateId || 'unknown', name),
+    name,
+    inputs,
+    expectedOutput,
+    expectedState,
+    status: 'not-run',
+    evidence: 'template-generated'
+  });
+
+  const scenarios = {
+    'self-holding': [
+      scenario('start pulse latches output', { start: true, stop: false }, true, { [output]: true }),
+      scenario('output remains latched after start clears', { start: false, stop: false, previouslyLatched: true }, true, { [output]: true }),
+      scenario('stop has priority and clears output', { start: true, stop: true, previouslyLatched: true }, false, { [output]: false })
+    ],
+    'start-stop': [
+      scenario('start clear keeps output off', { start: false, stop: false }, false, { [output]: false }),
+      scenario('start set turns output on', { start: true, stop: false }, true, { [output]: true }),
+      scenario('stop has priority', { start: true, stop: true }, false, { [output]: false })
+    ],
+    'delay-on': [
+      scenario('before ON delay output stays off', { [input]: true, elapsedSeconds: Math.max(0, durationSeconds - 0.1) }, false, { [output]: false }),
+      scenario('after ON delay output turns on', { [input]: true, elapsedSeconds: durationSeconds }, true, { [output]: true }),
+      scenario('input loss resets ON delay', { [input]: false, elapsedSeconds: durationSeconds }, false, { [output]: false })
+    ],
+    'delay-off': [
+      scenario('active input turns output on', { [input]: true, elapsedSinceOffSeconds: 0 }, true, { [output]: true }),
+      scenario('before OFF delay output remains on', { [input]: false, elapsedSinceOffSeconds: Math.max(0, durationSeconds - 0.1) }, true, { [output]: true }),
+      scenario('after OFF delay output turns off', { [input]: false, elapsedSinceOffSeconds: durationSeconds }, false, { [output]: false }),
+      scenario('stop bypasses OFF delay', { [input]: true, [secondInput]: true, elapsedSinceOffSeconds: 0 }, false, { [output]: false })
+    ],
+    'edge-one-shot': [
+      scenario('steady input produces no pulse', { previous: false, current: false }, false, { [output]: false }),
+      scenario('selected edge produces one scan pulse', { previous: false, current: true, scan: 1 }, true, { [output]: true }),
+      scenario('next scan clears one-shot output', { previous: true, current: true, scan: 2 }, false, { [output]: false })
+    ],
+    'alarm-latch-reset': [
+      scenario('alarm sets latch', { alarm: true, reset: false }, true, { [output]: true }),
+      scenario('latched alarm remains after trigger clears', { alarm: false, reset: false, previouslyLatched: true }, true, { [output]: true }),
+      scenario('reset clears alarm latch', { alarm: false, reset: true, previouslyLatched: true }, false, { [output]: false }),
+      scenario('reset has priority when alarm and reset coincide', { alarm: true, reset: true }, false, { [output]: false })
+    ],
+    'mutual-interlock': [
+      scenario('enable A permits only output A', { [input]: true, [secondInput]: false }, true, { [output]: true, [secondOutput]: false }),
+      scenario('enable B permits only output B', { [input]: false, [secondInput]: true }, false, { [output]: false, [secondOutput]: true }),
+      scenario('simultaneous requests never permit both outputs', { [input]: true, [secondInput]: true }, true, { mutuallyExclusive: true })
+    ],
+    'sensor-debounce': [
+      scenario('unstable sensor shorter than debounce remains off', { [input]: true, stableSeconds: Math.max(0, durationSeconds - 0.1) }, false, { [output]: false }),
+      scenario('stable sensor reaches debounce and turns on', { [input]: true, stableSeconds: durationSeconds }, true, { [output]: true }),
+      scenario('sensor dropout resets debounce', { [input]: false, stableSeconds: durationSeconds }, false, { [output]: false })
+    ]
+  };
+
+  return scenarios[templateId] || [];
+}
+
 export function buildChangeCandidateV2({
   analysis,
   plan,
@@ -366,7 +462,8 @@ export function buildChangeCandidateV2({
   const addressConflicts = assessAllocatedAddresses(
     analysis,
     usableCircuitDraft,
-    facts.targetAddresses
+    facts.targetAddresses,
+    { existingSource }
   );
   const mustReviewConflicts = [...writerImpact.conflicts, ...addressConflicts].filter(
     (conflict) => conflict.severity === 'must-review'

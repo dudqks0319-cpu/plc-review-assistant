@@ -156,3 +156,30 @@ test('duplicate existing writers hold instruction emission for engineer review',
     false
   );
 });
+
+test('existing-project candidates hold explicit input or output addresses missing from the snapshot', () => {
+  const plan = createChangePlan({
+    analysis: existingMitsubishiAnalysis(),
+    vendor: 'mitsubishi',
+    requestText: '허가 X0과 X1로 두 출력 Y20 Y21 상호 인터락 회로를 변경해줘.',
+    sourceContent: 'PROGRAM MAIN\nLD X0\nANI X1\nOUT Y20\nEND',
+    sourceFilename: 'main.lst'
+  });
+
+  assert.equal(plan.changeCandidateV2.template.id, 'mutual-interlock');
+  assert.equal(plan.changeCandidateV2.status, 'needs-review');
+  assert.equal(plan.executionScope, 'review-only');
+  assert.equal(
+    plan.changeCandidateV2.impactAnalysis.conflicts.some(
+      (conflict) =>
+        conflict.code === 'UNVERIFIED_DEVICE_ADDRESS' &&
+        conflict.address === 'Y21'
+    ),
+    true
+  );
+  assert.equal(plan.changeCandidateV2.policy.canEmitInstructionCandidate, false);
+  assert.equal(
+    plan.candidateFiles.some((file) => /instruction|before-after\.diff/.test(file.filename)),
+    false
+  );
+});

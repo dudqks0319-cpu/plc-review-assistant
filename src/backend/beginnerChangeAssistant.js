@@ -7,7 +7,10 @@ import {
   calculateTimerDuration,
   getCpuProfile
 } from '../adapters/mitsubishi/deviceAddress.js';
-import { buildChangeCandidateV2 } from '../application/changeCandidateV2.js';
+import {
+  buildChangeCandidateV2,
+  createTemplateTestScenarios
+} from '../application/changeCandidateV2.js';
 
 const HIGH_RISK_MACHINE_PROFILES = [
   {
@@ -217,13 +220,46 @@ function addCircuitAssumptions(circuitDraft) {
       '호출·도착·문 닫힘 신호는 정상적으로 배선되고 진단된 논리 신호라고 가정합니다.',
       '브레이크, 도어락, 과속, 이중 위치 검출, 안전 PLC/릴레이는 별도 안전 시스템으로 검증해야 합니다.'
     ];
+  } else if (circuitDraft.circuitType === 'edge-one-shot') {
+    const trigger = byRole('엣지') || 'X0';
+    assumptions = [
+      `${trigger}의 선택한 상승/하강 전이가 PLC 스캔에서 정상 검출된다고 가정합니다.`,
+      'one-shot 내부 릴레이와 출력은 한 스캔 동안만 ON 되어야 합니다.',
+      '외부 장치가 한 스캔 펄스를 놓칠 수 있으면 별도 래치 또는 핸드셰이크가 필요합니다.'
+    ];
+  } else if (circuitDraft.circuitType === 'alarm-latch-reset') {
+    const alarm = byRole('알람 발생') || 'X0';
+    const reset = byRole('복귀') || 'X1';
+    assumptions = [
+      `${alarm}=ON은 알람 발생 요청으로 가정합니다.`,
+      `${reset}=ON은 승인된 알람 Reset 요청으로 가정하며 동시 입력에서는 Reset을 우선합니다.`,
+      '알람 원인이 남아 있는 상태에서 Reset을 허용할지는 현장 표준으로 확인해야 합니다.'
+    ];
+  } else if (circuitDraft.circuitType === 'mutual-interlock') {
+    assumptions = [
+      '두 출력은 동시에 ON 되면 안 되는 독립 명령 출력으로 가정합니다.',
+      '한 스캔 안의 명령 순서와 기존 출력 Writer가 상호 배타 불변식을 깨지 않는지 확인해야 합니다.',
+      '기계적 위험이 있는 정·역회전, 상·하강, 브레이크 제어에는 별도 하드웨어 안전 인터락이 필요합니다.'
+    ];
+  } else if (
+    ['delayed-output', 'delay-off', 'sensor-debounce'].includes(
+      circuitDraft.circuitType
+    )
+  ) {
+    const start = byRole('기동') || byRole('감지') || byRole('센서') || 'X0';
+    const stop = byRole('정지') || byRole('인터락') || 'X1';
+    assumptions = [
+      `${start}=ON은 시작 또는 감지 조건으로 가정합니다.`,
+      `${stop}=ON은 정지 또는 인터락 요청으로 가정합니다.`,
+      '타이머 시간값은 정확한 CPU·명령·타이머 번호의 time base가 검증된 뒤에만 생성해야 합니다.'
+    ];
   } else {
     const start = byRole('기동') || byRole('감지') || 'X0';
     const stop = byRole('정지') || byRole('인터락') || 'X1';
     assumptions = [
       `${start}=ON은 시작 또는 감지 조건으로 가정합니다.`,
       `${stop}=ON은 정지 또는 인터락 요청으로 가정합니다.`,
-      '타이머 시간값은 정확한 CPU·명령·타이머 번호의 time base가 검증된 뒤에만 생성해야 합니다.'
+      '실제 입력 접점의 NO/NC 논리와 출력 주소는 프로젝트 도면으로 확인해야 합니다.'
     ];
   }
 
@@ -649,6 +685,9 @@ export function createChangePlan(options) {
   });
   plan.changeCandidateV2 = changeCandidateV2;
   plan.riskClass = changeCandidateV2.risk.class;
+  if (!timerUnknown && changeCandidateV2.status !== 'blocked') {
+    plan.testCases = createTemplateTestScenarios(changeCandidateV2);
+  }
 
   if (changeCandidateV2.status === 'candidate') {
     plan.executionScope = changeCandidateV2.risk.scope;

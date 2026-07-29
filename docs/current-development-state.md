@@ -12,14 +12,14 @@ Pilot 승인 또는 Production 출시를 의미하지 않는다.
 
 | 단계 | 상태 | 현재 증거 | 남은 게이트 |
 | --- | --- | --- | --- |
-| Phase 0 브랜치 안정화 | 로컬 완료 | 전체 Node 테스트 62/62, `git diff --check` 통과 | 원격 CI는 별도 |
+| Phase 0 브랜치 안정화 | 로컬 완료 | 전체 Node 테스트 64/64, `git diff --check` 통과 | 원격 CI는 별도 |
 | Phase 1 Domain IR·SourceAnchor | 로컬 완료 | canonical snapshot, instruction/reference SourceAnchor, SHA-256 | 실제 익명화 프로젝트 교차 검증 |
 | Phase 2 CPU Profile·주소 파서 | 로컬 완료 | FX3/QCPU/LCPU profile, FX3 X/Y 8진 주소 테스트, Unknown timer 정책 | 더 많은 CPU 모델 공식표 |
 | Phase 3 Project Bundle·명령 파서 | 로컬 완료 | CSV/TXT/LST/ASC 다중 Import, 인코딩, immutable snapshot, unknown opcode 보존 | Golden Fixture 확대 |
 | Phase 4 Cross-reference·Data Flow | 로컬 완료 | Reader/Writer/SET/RST index, 전방·후방 trace, evidence edge | 대형 프로젝트 성능 측정 |
 | Phase 5 근거형 질문 | 로컬 완료 | 10개 질문 유형, deterministic Query Planner, confidence/unknown, 원문 줄 이동 | Pilot 질문 정확도 측정 |
 | Phase 6 RAG | 로컬 완료 | TXT/MD 메모리 색인, vendor/CPU 격리, 문서 citation, injection 문단 제외 | 벤더 공식 문서 권리 검토 |
-| Phase 7 변경 후보 v2 | 진행 중 | 저위험 8종 분류, Logic IR, R1~R4, Writer·주소 충돌, test/report 산출물 | Logic-IR-only 5종 Renderer와 자동 수정 반복 |
+| Phase 7 변경 후보 v2 | 로컬 완료 | 저위험 8종 GX Works2 Renderer, Logic IR, R1~R4, Writer·주소 충돌, Template별 test/report | 실제 GX Works2 프로그램 체크·Pilot |
 | Phase 8 검증 루프 | 일부 존재 | 제한된 timer/stop-priority harness | 반복 수정, Validation Matrix, Trend, 외부 adapter |
 | Phase 9 UI 전면 개선 | 일부 존재 | 근거 질문 UI, 키보드 focus, 44px 터치, 390px 가로 넘침 없음 | React/TypeScript, Project Tree, Network/Device/Data Flow 화면 |
 | Phase 10 패키징·Pilot | 일부 존재 | loopback 서버, Windows launcher | 재시작 복원, 삭제/로그 정책, macOS package, Pilot |
@@ -59,16 +59,19 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 
 ## 다음 작업
 
-1. delay-OFF, one-shot, alarm latch/reset, mutual interlock, sensor debounce
-   중립 IR을 GX Works2 검토용 Renderer로 확장한다.
-2. 각 Template에 맞는 자동 테스트 시나리오와 실패 피드백을 분리한다.
+1. Phase 8 Validation Matrix와 생성→검증→수정 반복을 구현한다.
+2. Template별 `not-run` 시나리오를 간이 Simulator의 실제
+   `pass/fail/warning` 결과와 Trend로 연결한다.
 3. 기존 Writer 1개는 정확한 SourceAnchor 위치 수정 후보로 연결하고,
    Writer 2개 이상은 계속 명령 후보를 보류한다.
-4. Phase 8 Validation Matrix와 생성→검증→수정 반복을 구현한다.
+4. 외부 ST Tool과 GX Works2 수동 프로그램 체크 결과를 기록할
+   Adapter 계약을 구현한다.
 
 ## Phase 7 현재 증거
 
 - 8개 저위험 Template을 명시적으로 분류한다.
+- 8개 모두 GX Works2 검토용 Renderer와 최소 3개의 Template별
+  `not-run` 테스트 시나리오를 제공한다.
 - `LogicCandidate`는 입력·출력·내부·타이머·불변식·가정을 문자열
   명령과 분리해 보관한다.
 - R1은 파일 없는 저위험 Draft, R2는 기존 프로젝트 변경 후보,
@@ -82,6 +85,8 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
   명령·diff·CSV 산출물을 보류한다.
 - 기존 파일에서 Template 또는 필수 신호가 불명확하면 근거 없는
   X0/X1/T200을 만들지 않는다.
+- 기존 Snapshot에 없는 입력·출력 주소는
+  `UNVERIFIED_DEVICE_ADDRESS`로 표시하고 명령 후보를 보류한다.
 - 390×844 실제 화면에서 가로 넘침이 없고 버튼·선택·요약 컨트롤은
   모두 44px 이상이다.
 
@@ -96,7 +101,6 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 
 | 잔여 위험 | 담당 | 완료 기한 |
 | --- | --- | --- |
-| Logic-IR-only 5종의 GX Works2 Renderer 미구현 | FullStackDev | Phase 7 종료 전 |
 | 실제 GX Works2 Import·프로그램 체크 미검증 | PLC 담당자 | Pilot 시작 전 |
 | R3/R4 분류의 현장 위험성 평가 미검증 | 안전 담당자 | Pilot 시작 전 |
 | 실제 익명화 프로젝트의 Writer·주소 충돌 정확도 미측정 | PLC 담당자 | Pilot 시작 전 |

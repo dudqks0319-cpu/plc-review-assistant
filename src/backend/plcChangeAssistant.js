@@ -37,8 +37,43 @@ const UNSAFE_ACTION_KEYWORDS = [
   '건너'
 ];
 
-const START_KEYWORDS = ['start', 'enable', 'auto', 'run', 'sensor', 'detect', '시작', '기동', '자동', '감지', '센서'];
-const STOP_KEYWORDS = ['stop', 'emergency', 'overload', 'fault', 'alarm', 'door', '정지', '비상', '과부하', '알람', '도어'];
+const START_KEYWORDS = [
+  'start',
+  'enable',
+  'trigger',
+  'edge',
+  'alarm',
+  'auto',
+  'run',
+  'sensor',
+  'detect',
+  '시작',
+  '기동',
+  '허가',
+  '트리거',
+  '엣지',
+  '알람',
+  '경보',
+  '자동',
+  '감지',
+  '센서'
+];
+const STOP_KEYWORDS = [
+  'stop',
+  'reset',
+  'emergency',
+  'overload',
+  'fault',
+  'alarm',
+  'door',
+  '정지',
+  '리셋',
+  '복귀',
+  '비상',
+  '과부하',
+  '알람',
+  '도어'
+];
 
 const VENDOR_PROFILES = {
   siemens: {
@@ -307,6 +342,26 @@ function pickDevice(requestText, prefixes, fallback) {
 function detectCircuitKind(requestText) {
   const normalized = lower(requestText).replace(/\s+/g, '');
 
+  if (/지연(?:off|오프)|delay[-_]?off|(?:뒤|후).{0,12}(?:꺼|off)/.test(normalized)) {
+    return 'delay-off';
+  }
+
+  if (/one[-_]?shot|원샷|상승(?:엣지|edge)|하강(?:엣지|edge)|rising|falling/.test(normalized)) {
+    return 'edge-one-shot';
+  }
+
+  if (/(?:alarm|알람|경보).{0,40}(?:latch|래치|유지|reset|리셋|복귀)/.test(normalized)) {
+    return 'alarm-latch-reset';
+  }
+
+  if (/상호인터락|상호연동|mutualinterlock|두출력.{0,20}(?:동시|인터락)/.test(normalized)) {
+    return 'mutual-interlock';
+  }
+
+  if (/debounce|디바운스|채터링|센서.{0,30}(?:흔들|노이즈|안정)/.test(normalized)) {
+    return 'sensor-debounce';
+  }
+
   if (/자기유지|자기보유|seal[-_]?in|self[-_]?hold|holding/.test(normalized)) {
     return 'self-holding';
   }
@@ -423,6 +478,23 @@ function chooseMitsubishiTimer(project) {
   }
 
   return 'T_UNASSIGNED';
+}
+
+function chooseMitsubishiInternal(project) {
+  const usedInternals = collectUsedMitsubishiDevices(project, 'M');
+  for (let relay = 200; relay <= 499; relay += 1) {
+    if (!usedInternals.has(relay)) {
+      return `M${relay}`;
+    }
+  }
+
+  for (let relay = 0; relay <= 199; relay += 1) {
+    if (!usedInternals.has(relay)) {
+      return `M${relay}`;
+    }
+  }
+
+  return 'M_UNASSIGNED';
 }
 
 function createMitsubishiPatch(requirement, targetOutput, startConditions, stopConditions, project) {
@@ -688,6 +760,253 @@ function createDelayedOutputDraft({ requirement, requestText, targetOutput, star
   };
 }
 
+function createDelayOffDraft({ requirement, requestText, targetOutput, startConditions, stopConditions, project }) {
+  const delay = requirement.delaySeconds || extractDelaySeconds(requestText) || 0;
+  const xDevices = extractDevices(requestText, ['X']);
+  const output = pickDevice(requestText, ['Y'], targetOutput.address || 'Y0');
+  const start = startConditions[0]?.address || xDevices[0] || 'X0';
+  const stop = stopConditions[0]?.address || xDevices[1] || 'X1';
+  const timerDevice = chooseMitsubishiTimer(project);
+  const holdRelay = chooseMitsubishiInternal(project);
+  const timerPreset = VENDOR_PROFILES.mitsubishi.timerPreset(delay || 1);
+  const instructionList = withEndInstruction([
+    '; GX Works2 candidate: delay-off circuit',
+    `LD ${start}`,
+    `SET ${holdRelay}`,
+    `LD ${stop}`,
+    `RST ${holdRelay}`,
+    `LDI ${start}`,
+    `ANI ${stop}`,
+    `OUT ${timerDevice} ${timerPreset}`,
+    `LD ${timerDevice}`,
+    `RST ${holdRelay}`,
+    `LD ${holdRelay}`,
+    `ANI ${stop}`,
+    `OUT ${output}`
+  ]);
+
+  return {
+    targetPlatform: 'GX Works2',
+    circuitType: 'delay-off',
+    title: 'GX Works2 지연 OFF 회로 초안',
+    ioMap: makeIoMap([
+      [start, 'Run Input', '기동 입력', 'NO'],
+      [stop, 'Stop/Interlock', '정지 또는 인터락 입력', 'NC logic by ANI'],
+      [holdRelay, 'Off-delay Hold', '지연 OFF 내부 유지', 'internal relay'],
+      [timerDevice, 'Off-delay Timer', `${delay}초 OFF 지연 타이머`, 'timer'],
+      [output, 'Target Output', '지연 OFF 대상 출력', 'coil']
+    ]),
+    instructionList,
+    ladderPreview: [
+      {
+        title: 'Network 1 - 출력 유지와 OFF 지연',
+        ascii: [
+          `|----[ ${start} RUN ]--------------------------------------(SET ${holdRelay})`,
+          `|----[ ${stop} STOP ]-------------------------------------(RST ${holdRelay})`,
+          `|----[/ ${start} RUN ]----[/ ${stop} STOP ]----( ${timerDevice} ${timerPreset} )`,
+          `|----[ ${timerDevice} DONE ]-------------------------------(RST ${holdRelay})`,
+          `|----[ ${holdRelay} HOLD ]----[/ ${stop} STOP ]------------( ${output} OUT )`
+        ].join('\n'),
+        explanation: `${start}가 OFF 된 뒤 ${timerDevice}가 ${timerPreset}에 도달할 때까지 ${holdRelay}로 ${output}을 유지하며, ${stop}은 즉시 출력을 끕니다.`
+      }
+    ],
+    operationSummary: [
+      `${start}가 ON 되면 ${holdRelay}가 SET 되어 ${output}이 ON 됩니다.`,
+      `${start}가 OFF 되면 ${timerDevice}가 시작되고 ${delay}초 후 ${holdRelay}를 RST 합니다.`,
+      `${stop}이 ON 되면 타이머와 무관하게 ${holdRelay}와 ${output}을 즉시 OFF 합니다.`
+    ],
+    gxWorks2Notes: [
+      'SET/RST 스캔 순서와 정지 우선 조건을 GX Works2 프로그램 체크에서 확인해야 합니다.',
+      '타이머 번호와 preset time base는 선택한 CPU 프로필과 실제 프로젝트에서 다시 확인해야 합니다.'
+    ],
+    safetyNotes: ['지연 OFF가 허용되지 않는 안전 출력에는 사용하지 않습니다.']
+  };
+}
+
+function createEdgeOneShotDraft({ requestText, targetOutput, project }) {
+  const trigger = pickDevice(requestText, ['X'], 'X0');
+  const output = pickDevice(requestText, ['Y'], targetOutput.address || 'Y0');
+  const pulseRelay = chooseMitsubishiInternal(project);
+  const falling = /하강|falling/i.test(requestText);
+  const edgeInstruction = falling ? 'PLF' : 'PLS';
+  const edgeLabel = falling ? '하강' : '상승';
+  const instructionList = withEndInstruction([
+    `; GX Works2 candidate: ${edgeLabel} edge one-shot`,
+    `LD ${trigger}`,
+    `${edgeInstruction} ${pulseRelay}`,
+    `LD ${pulseRelay}`,
+    `OUT ${output}`
+  ]);
+
+  return {
+    targetPlatform: 'GX Works2',
+    circuitType: 'edge-one-shot',
+    title: `GX Works2 ${edgeLabel} 엣지 one-shot 회로 초안`,
+    ioMap: makeIoMap([
+      [trigger, 'Edge Trigger', `${edgeLabel} 엣지 입력`, falling ? 'falling edge' : 'rising edge'],
+      [pulseRelay, 'One-shot Relay', `${edgeLabel} 엣지 1 scan 내부 펄스`, 'internal relay'],
+      [output, 'One-shot Output', '1 scan 펄스 출력', 'coil']
+    ]),
+    instructionList,
+    ladderPreview: [
+      {
+        title: `Network 1 - ${edgeLabel} 엣지 펄스`,
+        ascii: [
+          `|----[ ${trigger} TRIGGER ]-------------------------------(${edgeInstruction} ${pulseRelay})`,
+          `|----[ ${pulseRelay} ONE SHOT ]----------------------------( ${output} ONE SCAN )`
+        ].join('\n'),
+        explanation: `${trigger}의 ${edgeLabel} 엣지를 ${edgeInstruction}로 검출해 ${pulseRelay}와 ${output}을 한 스캔 동안만 ON 합니다.`
+      }
+    ],
+    operationSummary: [
+      `${trigger}의 ${edgeLabel} 전이에서 ${output}이 한 번만 ON 됩니다.`,
+      '입력이 같은 상태로 유지되는 동안 출력 펄스가 반복되지 않아야 합니다.'
+    ],
+    gxWorks2Notes: ['대상 CPU가 PLS/PLF 명령을 지원하는지 GX Works2 프로그램 체크에서 확인해야 합니다.'],
+    safetyNotes: ['한 스캔 펄스를 놓칠 수 있는 외부 장치에는 별도 래치 또는 핸드셰이크가 필요합니다.']
+  };
+}
+
+function createAlarmLatchResetDraft({ requestText, targetOutput }) {
+  const xDevices = extractDevices(requestText, ['X']);
+  const alarm = xDevices[0] || 'X0';
+  const reset = xDevices[1] || 'X1';
+  const output = pickDevice(requestText, ['Y'], targetOutput.address || 'Y0');
+  const instructionList = withEndInstruction([
+    '; GX Works2 candidate: alarm latch and reset',
+    `LD ${alarm}`,
+    `SET ${output}`,
+    `LD ${reset}`,
+    `RST ${output}`
+  ]);
+
+  return {
+    targetPlatform: 'GX Works2',
+    circuitType: 'alarm-latch-reset',
+    title: 'GX Works2 알람 Latch + Reset 회로 초안',
+    ioMap: makeIoMap([
+      [alarm, 'Alarm Trigger', '알람 발생 입력', 'NO'],
+      [reset, 'Alarm Reset', '알람 복귀 입력', 'NO'],
+      [output, 'Alarm Output', '래치 알람 출력', 'SET/RST coil']
+    ]),
+    instructionList,
+    ladderPreview: [
+      {
+        title: 'Network 1 - 알람 래치와 Reset 우선',
+        ascii: [
+          `|----[ ${alarm} ALARM ]------------------------------------(SET ${output})`,
+          `|----[ ${reset} RESET ]------------------------------------(RST ${output})`
+        ].join('\n'),
+        explanation: `${alarm} 발생 시 ${output}을 SET하고, 뒤쪽 ${reset} RST 명령으로 동시 입력 시 Reset을 우선합니다.`
+      }
+    ],
+    operationSummary: [
+      `${alarm}가 한 번 ON 되면 ${output}이 래치됩니다.`,
+      `${reset}이 ON 되면 ${output}이 RST 됩니다.`,
+      '알람 원인이 남아 있는 상태에서 Reset 허용 여부는 현장 정책으로 확인해야 합니다.'
+    ],
+    gxWorks2Notes: ['동일 출력에 대한 기존 SET/RST/OUT Writer가 없는지 교차 참조로 확인해야 합니다.'],
+    safetyNotes: ['안전 알람 또는 보호 정지 신호의 우회·자동 Reset 용도로 사용하지 않습니다.']
+  };
+}
+
+function createMutualInterlockDraft({ requestText, targetOutput }) {
+  const xDevices = extractDevices(requestText, ['X']);
+  const yDevices = extractDevices(requestText, ['Y']);
+  const enableA = xDevices[0] || 'X0';
+  const enableB = xDevices[1] || 'X1';
+  const outputA = yDevices[0] || targetOutput.address || 'Y0';
+  const outputB = yDevices[1] || (outputA === 'Y0' ? 'Y1' : 'Y0');
+  const instructionList = withEndInstruction([
+    '; GX Works2 candidate: two-output mutual interlock',
+    `LD ${enableA}`,
+    `ANI ${outputB}`,
+    `OUT ${outputA}`,
+    `LD ${enableB}`,
+    `ANI ${outputA}`,
+    `OUT ${outputB}`
+  ]);
+
+  return {
+    targetPlatform: 'GX Works2',
+    circuitType: 'mutual-interlock',
+    title: 'GX Works2 두 출력 상호 인터락 회로 초안',
+    ioMap: makeIoMap([
+      [enableA, 'Enable A', '출력 A 허가 입력', 'NO'],
+      [enableB, 'Enable B', '출력 B 허가 입력', 'NO'],
+      [outputA, 'Output A', '상호 인터락 출력 A', 'coil'],
+      [outputB, 'Output B', '상호 인터락 출력 B', 'coil']
+    ]),
+    instructionList,
+    ladderPreview: [
+      {
+        title: 'Network 1 - 두 출력 상호 배타',
+        ascii: [
+          `|----[ ${enableA} ENABLE A ]----[/ ${outputB} ]------------( ${outputA} OUT A )`,
+          `|----[ ${enableB} ENABLE B ]----[/ ${outputA} ]------------( ${outputB} OUT B )`
+        ].join('\n'),
+        explanation: `${outputA}와 ${outputB}의 NC 조건을 교차 적용해 두 출력이 동시에 ON 되지 않도록 합니다.`
+      }
+    ],
+    operationSummary: [
+      `${enableA}가 ON이고 ${outputB}가 OFF일 때만 ${outputA}가 ON 됩니다.`,
+      `${enableB}가 ON이고 ${outputA}가 OFF일 때만 ${outputB}가 ON 됩니다.`,
+      `${outputA}와 ${outputB}가 동시에 ON 되는 상태를 허용하지 않습니다.`
+    ],
+    gxWorks2Notes: ['출력 피드백이 필요한 설비에서는 실제 접촉기 보조접점과 하드웨어 인터락을 별도로 사용해야 합니다.'],
+    safetyNotes: ['정·역회전 또는 상·하강 모션은 R3로 분류하며 이 저위험 Template만으로 현장 적용하지 않습니다.']
+  };
+}
+
+function createSensorDebounceDraft({ requirement, requestText, targetOutput, startConditions, stopConditions, project }) {
+  const delay = requirement.delaySeconds || extractDelaySeconds(requestText) || 0;
+  const xDevices = extractDevices(requestText, ['X']);
+  const sensor = startConditions[0]?.address || xDevices[0] || 'X0';
+  const stop = stopConditions[0]?.address || xDevices[1] || 'X1';
+  const output = pickDevice(requestText, ['Y'], targetOutput.address || 'Y0');
+  const timerDevice = chooseMitsubishiTimer(project);
+  const timerPreset = VENDOR_PROFILES.mitsubishi.timerPreset(delay || 1);
+  const instructionList = withEndInstruction([
+    '; GX Works2 candidate: sensor debounce',
+    `LD ${sensor}`,
+    `ANI ${stop}`,
+    `OUT ${timerDevice} ${timerPreset}`,
+    `LD ${timerDevice}`,
+    `ANI ${stop}`,
+    `OUT ${output}`
+  ]);
+
+  return {
+    targetPlatform: 'GX Works2',
+    circuitType: 'sensor-debounce',
+    title: 'GX Works2 센서 Debounce 회로 초안',
+    ioMap: makeIoMap([
+      [sensor, 'Sensor Input', '안정 확인 센서 입력', 'NO'],
+      [stop, 'Stop/Interlock', '정지 또는 인터락 입력', 'NC logic by ANI'],
+      [timerDevice, 'Debounce Timer', `${delay}초 입력 안정 타이머`, 'timer'],
+      [output, 'Debounced Output', '안정 확인 출력', 'coil']
+    ]),
+    instructionList,
+    ladderPreview: [
+      {
+        title: 'Network 1 - 센서 안정 시간 확인',
+        ascii: [
+          `|----[ ${sensor} SENSOR ]----[/ ${stop} STOP ]----( ${timerDevice} ${timerPreset} )`,
+          `|----[ ${timerDevice} DONE ]----[/ ${stop} STOP ]--( ${output} STABLE )`
+        ].join('\n'),
+        explanation: `${sensor}가 ${delay}초 연속 ON일 때만 ${output}을 ON하며, 중간에 OFF되면 타이머가 reset 됩니다.`
+      }
+    ],
+    operationSummary: [
+      `${sensor}가 ${delay}초 동안 연속 ON일 때 ${output}이 ON 됩니다.`,
+      `안정 시간 전에 ${sensor}가 OFF되면 ${timerDevice}가 reset 됩니다.`,
+      `${stop}은 타이머와 출력보다 우선합니다.`
+    ],
+    gxWorks2Notes: ['OFF 방향 Debounce가 필요한지는 별도 요구사항으로 확인해야 합니다.'],
+    safetyNotes: ['안전 센서의 진단이나 안전 응답 시간을 일반 타이머로 대체하지 않습니다.']
+  };
+}
+
 function createGxWorks2CircuitDraft({ requirement, requestText, targetOutput, startConditions, stopConditions, project }) {
   const kind = detectCircuitKind(requestText);
 
@@ -697,6 +1016,33 @@ function createGxWorks2CircuitDraft({ requirement, requestText, targetOutput, st
 
   if (kind === 'two-floor-elevator') {
     return createElevatorDraft({ requestText });
+  }
+
+  if (kind === 'delay-off') {
+    return createDelayOffDraft({ requirement, requestText, targetOutput, startConditions, stopConditions, project });
+  }
+
+  if (kind === 'edge-one-shot') {
+    return createEdgeOneShotDraft({ requestText, targetOutput, project });
+  }
+
+  if (kind === 'alarm-latch-reset') {
+    return createAlarmLatchResetDraft({ requestText, targetOutput });
+  }
+
+  if (kind === 'mutual-interlock') {
+    return createMutualInterlockDraft({ requestText, targetOutput });
+  }
+
+  if (kind === 'sensor-debounce') {
+    return createSensorDebounceDraft({
+      requirement,
+      requestText,
+      targetOutput,
+      startConditions,
+      stopConditions,
+      project
+    });
   }
 
   return createDelayedOutputDraft({ requirement, requestText, targetOutput, startConditions, stopConditions, project });

@@ -333,7 +333,11 @@ export interface ChangeCandidateV2 {
       }>;
     }>;
     conflicts: Array<{
-      code: 'EXISTING_WRITER_REVIEW' | 'DUPLICATE_WRITER_CONFLICT' | 'ADDRESS_ALLOCATION_CONFLICT';
+      code:
+        | 'EXISTING_WRITER_REVIEW'
+        | 'DUPLICATE_WRITER_CONFLICT'
+        | 'ADDRESS_ALLOCATION_CONFLICT'
+        | 'UNVERIFIED_DEVICE_ADDRESS';
       severity: 'review' | 'must-review';
       address: string;
       detail: string;

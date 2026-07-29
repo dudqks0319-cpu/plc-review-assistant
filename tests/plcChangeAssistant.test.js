@@ -27,6 +27,27 @@ function draftMitsubishiAnalysis() {
   };
 }
 
+function draftMitsubishiAnalysisWithCpu() {
+  return {
+    ...draftMitsubishiAnalysis(),
+    snapshot: {
+      cpuProfileId: {
+        id: 'verified-fx3-test-profile',
+        addressRadixByDevice: { X: 8, Y: 8, M: 10, T: 10 },
+        timerProfiles: [
+          {
+            deviceType: 'T',
+            status: 'verified',
+            secondsPerUnit: 0.1,
+            start: 0,
+            end: 255
+          }
+        ]
+      }
+    }
+  };
+}
+
 test('createChangePlan builds Siemens SCL patch candidates and timer harness results', () => {
   const analysis = analyzePlcProject({
     filename: 'conveyor.xml',
@@ -156,6 +177,81 @@ test('createChangePlan restricts brake, servo, and safety-motion drafts to R3 si
       false,
       requestText
     );
+  }
+});
+
+test('createChangePlan renders all five additional low-risk templates as GX Works2 candidates', () => {
+  const scenarios = [
+    {
+      requestText: '시작 X0, 정지 X1, 출력 Y0은 시작이 꺼진 뒤 3초 지연 OFF 해줘',
+      analysis: draftMitsubishiAnalysisWithCpu(),
+      template: 'delay-off',
+      circuitType: 'delay-off',
+      instructions: ['SET M200', 'OUT T200 K30', 'RST M200', 'OUT Y0']
+    },
+    {
+      requestText: '상승 엣지 X0에서 Y0 one-shot 출력을 만들어줘',
+      analysis: draftMitsubishiAnalysis(),
+      template: 'edge-one-shot',
+      circuitType: 'edge-one-shot',
+      instructions: ['LD X0', 'PLS M200', 'LD M200', 'OUT Y0']
+    },
+    {
+      requestText: '알람 X0 발생 시 Y0을 래치하고 리셋 X1이 켜지면 복귀해줘',
+      analysis: draftMitsubishiAnalysis(),
+      template: 'alarm-latch-reset',
+      circuitType: 'alarm-latch-reset',
+      instructions: ['LD X0', 'SET Y0', 'LD X1', 'RST Y0']
+    },
+    {
+      requestText: '허가 X0과 X1로 두 출력 Y0 Y1 상호 인터락 회로를 만들어줘',
+      analysis: draftMitsubishiAnalysis(),
+      template: 'mutual-interlock',
+      circuitType: 'mutual-interlock',
+      instructions: ['LD X0', 'ANI Y1', 'OUT Y0', 'LD X1', 'ANI Y0', 'OUT Y1']
+    },
+    {
+      requestText: '센서 X0이 0.5초 안정된 뒤 출력 Y0이 켜지는 Debounce 회로, 정지 X1',
+      analysis: draftMitsubishiAnalysisWithCpu(),
+      template: 'sensor-debounce',
+      circuitType: 'sensor-debounce',
+      instructions: ['LD X0', 'ANI X1', 'OUT T200 K5', 'LD T200', 'OUT Y0']
+    }
+  ];
+
+  for (const scenario of scenarios) {
+    const changePlan = createChangePlan({
+      analysis: scenario.analysis,
+      vendor: 'mitsubishi',
+      requestText: scenario.requestText
+    });
+
+    assert.equal(changePlan.changeCandidateV2.template.id, scenario.template, scenario.requestText);
+    assert.equal(changePlan.changeCandidateV2.template.renderer, 'gxworks2', scenario.requestText);
+    assert.equal(changePlan.changeCandidateV2.policy.canEmitInstructionCandidate, true, scenario.requestText);
+    assert.equal(changePlan.circuitDraft.circuitType, scenario.circuitType, scenario.requestText);
+    assert.equal(changePlan.testCases.length >= 3, true, scenario.requestText);
+    assert.equal(
+      changePlan.testCases.every((testCase) => testCase.status === 'not-run'),
+      true,
+      scenario.requestText
+    );
+    for (const instruction of scenario.instructions) {
+      assert.equal(changePlan.circuitDraft.instructionList.includes(instruction), true, `${scenario.requestText}: ${instruction}`);
+    }
+    assert.equal(
+      changePlan.candidateFiles.some((file) => file.filename === 'draft.instruction-draft.txt'),
+      true,
+      scenario.requestText
+    );
+    if (scenario.template === 'edge-one-shot') {
+      assert.equal(
+        changePlan.circuitDraft.assumptions.some((assumption) =>
+          assumption.includes('타이머 시간값')
+        ),
+        false
+      );
+    }
   }
 });
 
