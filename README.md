@@ -11,7 +11,8 @@ Supported inputs:
 - Siemens TIA Portal XML exports
 - Siemens PLC block/tag XML exports
 - Mitsubishi GX Developer/GX Works CSV label exports
-- Mitsubishi project listing TXT/LST exports
+- Mitsubishi instruction/listing TXT/LST/ASC exports
+- Up to 32 Mitsubishi export files in one in-memory Project Bundle
 
 Two product versions are exposed in the app:
 
@@ -29,7 +30,11 @@ Explicitly out of scope:
 ## What It Does
 
 - Detects supported file type from filename and content
+- Groups multiple Mitsubishi exports into a content-addressed, immutable review snapshot
+- Lets the reviewer declare the Mitsubishi CPU family and source encoding
 - Normalizes exported PLC data into projects, blocks, variables, I/O addresses, and call edges
+- Preserves SHA-256 source anchors for parsed instructions and findings
+- Builds reader/writer/SET/RST cross-references and bounded forward/backward data-flow traces
 - Flags static review candidates:
   - duplicate I/O address usage
   - missing block/tag comments
@@ -43,7 +48,7 @@ Explicitly out of scope:
 - Can generate a file-less natural-language draft plan when no PLC export has been uploaded
 - Generates GX Works2-oriented ladder instruction drafts and visible ladder previews for basic natural-language requests such as self-holding circuits and simple two-floor elevator training circuits
 - Finds target output, start conditions, stop/interlock candidates, and likely affected blocks
-- Generates vendor-specific patch candidates:
+- Generates vendor-specific review candidates only when the required engineering facts are known:
   - Siemens SCL and SimaticML notes
   - Mitsubishi GX Works2 instruction list, ladder preview notes, and CSV rows
 - Generates downloadable candidate files from the Codex app server:
@@ -51,7 +56,7 @@ Explicitly out of scope:
   - vendor patch candidate
   - unified diff
   - change-plan JSON
-- Runs a built-in static timer/stop-priority harness for expected-output checks
+- Runs a small static timer/stop-priority harness only when the required timer model is known
 - Downloads Markdown, Excel-compatible XML, and PDF reports
 
 ## Run
@@ -72,8 +77,10 @@ Windows에서는 `start-windows.bat`를 더블 클릭할 수 있습니다. 자�
 Open:
 
 ```text
-http://localhost:4173
+http://127.0.0.1:4173
 ```
+
+The server binds to the local loopback interface only.
 
 ## Test
 
@@ -82,6 +89,49 @@ npm test
 ```
 
 ## API
+
+### Project Bundle and immutable snapshot (v2)
+
+Create an in-memory Mitsubishi review workspace:
+
+```http
+POST /api/v2/workspaces
+Content-Type: application/json
+
+{
+  "name": "FX3 conveyor review",
+  "vendor": "mitsubishi",
+  "cpuProfileId": "mitsubishi-fx3"
+}
+```
+
+Import one or more allowlisted exports (`.csv`, `.txt`, `.lst`, `.asc`):
+
+```http
+POST /api/v2/workspaces/{workspaceId}/artifacts
+Content-Type: application/json
+
+{
+  "artifacts": [
+    { "filename": "labels.csv", "contentBase64": "...", "encoding": "cp949" },
+    { "filename": "main.lst", "contentBase64": "...", "encoding": "cp949" }
+  ]
+}
+```
+
+The response includes the immutable snapshot, per-artifact parse results, findings, source anchors, and data-flow edges. Identical content reuses the same content-addressed snapshot. Workspaces are memory-only and disappear when the server stops.
+
+Review endpoints:
+
+- `GET /api/v2/snapshots/{snapshotId}`
+- `GET /api/v2/snapshots/{snapshotId}/programs`
+- `GET /api/v2/snapshots/{snapshotId}/findings`
+- `GET /api/v2/snapshots/{snapshotId}/data-flow`
+- `GET /api/v2/snapshots/{snapshotId}/devices/{address}?maxTraceDepth=4`
+
+Defensive limits: 32 files per bundle, 2 MB per decoded file, 10 MB per bundle, 8 live workspaces, 10 snapshots per workspace, and 40 snapshots per process. ZIP extraction and path-like filenames are rejected.
+
+### Compatibility API (v1)
 
 Create an analysis:
 
@@ -162,11 +212,25 @@ Supported file-less GX Works2 draft examples:
 - `2층 엘리베이터 회로 만들어줘`
 - `제품 감지 후 컨베이어 모터를 3초 뒤 켜줘`
 
-These produce a visible I/O map, ASCII ladder preview, GX Works2 instruction-list candidate, CSV row candidate, and downloadable `.gxworks2.lst` file. They are engineering review drafts, not certified field logic.
+Requests that do not need a timer can produce a visible I/O map, ASCII ladder
+preview, a downloadable `.instruction-draft.txt`, and a `.logic-draft.json`.
+For an uploaded Mitsubishi export, the app may use
+`.instruction-candidate.txt`, `.before-after.diff`, and `.review-list.csv`.
+These are engineering review artifacts only; they are not verified GX Works2
+import formats.
+
+Mitsubishi timed requests are fail-closed. If the exact CPU model, timer
+device number, instruction, and time base are not backed by a verified timer
+profile, the response is `review-only`: no `K` preset, instruction candidate,
+diff, CSV, or simulation pass is generated. The JSON record explains which
+facts must be verified first.
 
 ## Security Notes
 
 - Uploaded content is analyzed in memory and is not written to disk by the app.
+- Mutating API requests accept local same-origin JSON only; cross-site and non-JSON requests are rejected.
+- Filenames, extensions, declared encodings, decoded sizes, bundle totals, and in-memory object counts are bounded before parsing.
+- Raw IP addresses are not stored or logged.
 - Candidate modified files are generated in the server response and downloaded by the browser; the app does not overwrite the original uploaded file.
 - No secrets are required for the default deterministic MVP.
 - If Codex app-server normalization is enabled, Codex credentials must stay server-side through environment variables or Codex local auth. Browser JavaScript never receives Codex tokens.
@@ -198,4 +262,7 @@ The app does not require the Codex normalizer to run. If Codex is unavailable, t
 
 PLC logic is context-dependent. Static analysis can highlight review candidates, but it cannot prove live equipment behavior. HMI references, drives, field wiring, scan-cycle timing, and safety validation must be checked through the owner’s normal engineering process.
 
-The built-in harness is intentionally small. It validates timer delay and stop-priority expectations for the generated candidate, then produces vendor-simulator scenarios for qualified engineers to run in TIA Portal/S7-PLCSIM Advanced or GX Works2/GX Simulator.
+The built-in harness is intentionally small. It validates only candidates for
+which the required timing facts are known, then produces vendor-simulator
+scenarios for qualified engineers to run in TIA Portal/S7-PLCSIM Advanced or
+GX Works2/GX Simulator. Unknown timer facts remain unknown.

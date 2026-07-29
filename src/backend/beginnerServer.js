@@ -5,12 +5,24 @@ import { fileURLToPath } from 'node:url';
 import { createChangePlan } from './beginnerChangeAssistant.js';
 import { normalizeChangeRequirement } from './requirementNormalizer.js';
 import { createServer as createLegacyServer } from './server.js';
+import {
+  assertJsonRequest,
+  assertLoopbackHost,
+  assertTrustedLocalMutation
+} from './localRequestGuard.js';
 
 const MAX_JSON_BYTES = 6_000_000;
 
 function writeSecurityHeaders(res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+  );
   res.setHeader('Cache-Control', 'no-store');
 }
 
@@ -41,8 +53,11 @@ function parseJsonBody(req, maxBytes = MAX_JSON_BYTES) {
       size += chunk.length;
       if (size > maxBytes) {
         settled = true;
-        reject(new Error('Payload too large'));
-        req.destroy();
+        const error = new Error('Payload too large');
+        error.code = 'PAYLOAD_TOO_LARGE';
+        error.statusCode = 413;
+        reject(error);
+        req.resume();
         return;
       }
 
@@ -187,23 +202,46 @@ export function createServer() {
     }
 
     try {
+      assertTrustedLocalMutation(req);
+      assertJsonRequest(req);
       await handleCreateChangePlan(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const statusCode = /필요|비어|올바르지|Invalid JSON|Payload too large/.test(message) ? 400 : 500;
+      const statusCode = Number.isInteger(error?.statusCode)
+        ? error.statusCode
+        : /필요|비어|올바르지|Invalid JSON|Payload too large/.test(message)
+          ? 400
+          : 500;
       if (statusCode >= 500) {
         console.error('[plc-beginner-server-error]', error);
       }
-      sendError(res, statusCode, statusCode === 400 ? 'bad_request' : 'internal_error', message);
+      sendError(
+        res,
+        statusCode,
+        typeof error?.code === 'string'
+          ? error.code.toLowerCase()
+          : statusCode >= 400 && statusCode < 500
+            ? 'bad_request'
+            : 'internal_error',
+        message
+      );
     }
   });
 }
 
+export function startServer({
+  port = Number(process.env.PORT || 4173),
+  host = process.env.HOST || '127.0.0.1'
+} = {}) {
+  const localHost = assertLoopbackHost(host);
+  const server = createServer();
+  server.listen(port, localHost, () => {
+    console.log(`PLC Beginner Wizard running on http://${localHost}:${port}`);
+  });
+  return server;
+}
+
 const executedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (fileURLToPath(import.meta.url) === executedPath) {
-  const port = Number(process.env.PORT || 4173);
-  const server = createServer();
-  server.listen(port, () => {
-    console.log(`PLC Beginner Wizard running on http://localhost:${port}`);
-  });
+  startServer();
 }

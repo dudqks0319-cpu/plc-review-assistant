@@ -1,5 +1,5 @@
 import { createServer as createHttpServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { extname, join, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,13 @@ import {
 } from './plcAnalyzer.js';
 import { createChangePlan, VENDOR_PROFILES } from './plcChangeAssistant.js';
 import { normalizeChangeRequirement } from './requirementNormalizer.js';
+import { handleApiV2Request } from './apiV2.js';
+import { createWorkspaceService } from '../application/workspaceService.js';
+import {
+  assertJsonRequest,
+  assertLoopbackHost,
+  assertTrustedLocalMutation
+} from './localRequestGuard.js';
 
 const PUBLIC_DIR = join(process.cwd(), 'public');
 const MAX_JSON_BYTES = 6_000_000;
@@ -26,7 +33,14 @@ const MIME_TYPES = {
 
 function writeSecurityHeaders(res, extraHeaders = {}) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+  );
   res.setHeader('Cache-Control', 'no-store');
 
   for (const [key, value] of Object.entries(extraHeaders)) {
@@ -73,12 +87,18 @@ function parseJsonBody(req, maxBytes = MAX_JSON_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let settled = false;
 
     req.on('data', (chunk) => {
+      if (settled) return;
       size += chunk.length;
       if (size > maxBytes) {
-        reject(new Error('Payload too large'));
-        req.destroy();
+        settled = true;
+        const error = new Error('Payload too large');
+        error.code = 'PAYLOAD_TOO_LARGE';
+        error.statusCode = 413;
+        reject(error);
+        req.resume();
         return;
       }
 
@@ -86,7 +106,9 @@ function parseJsonBody(req, maxBytes = MAX_JSON_BYTES) {
     });
 
     req.on('end', () => {
+      if (settled) return;
       try {
+        settled = true;
         if (chunks.length === 0) {
           resolve({});
           return;
@@ -94,11 +116,17 @@ function parseJsonBody(req, maxBytes = MAX_JSON_BYTES) {
 
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       } catch {
+        settled = true;
         reject(new Error('Invalid JSON body'));
       }
     });
 
-    req.on('error', reject);
+    req.on('error', (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
   });
 }
 
@@ -148,6 +176,7 @@ function validateAnalysisPayload(body) {
   return {
     filename: typeof body.filename === 'string' ? body.filename : 'uploaded-project.txt',
     vendor: typeof body.vendor === 'string' ? body.vendor : 'auto',
+    cpuProfileId: typeof body.cpuProfileId === 'string' ? body.cpuProfileId : null,
     content: body.content
   };
 }
@@ -327,12 +356,45 @@ async function handleNormalizeCodexRequirement(req, res) {
   sendJson(res, 200, { data: normalization });
 }
 
-export function createServer() {
+export function createServer({ workspaceService = createWorkspaceService() } = {}) {
   return createHttpServer(async (req, res) => {
     const method = req.method || 'GET';
     const url = new URL(req.url || '/', 'http://localhost');
+    const requestId = url.pathname.startsWith('/api/v2/') ? `req-${randomUUID()}` : null;
 
     try {
+      if (url.pathname.startsWith('/api/')) {
+        assertTrustedLocalMutation(req);
+        assertJsonRequest(req);
+      }
+
+      if (url.pathname.startsWith('/api/v2/')) {
+        const result = await handleApiV2Request({
+          method,
+          pathname: url.pathname,
+          searchParams: url.searchParams,
+          readJson: () => parseJsonBody(req),
+          workspaceService
+        });
+        if (!result.handled) {
+          sendJson(res, 404, {
+            requestId,
+            error: {
+              code: 'NOT_FOUND',
+              message: 'Not found',
+              details: [],
+              retryable: false
+            }
+          });
+          return;
+        }
+        sendJson(res, result.statusCode, {
+          requestId,
+          data: result.data
+        });
+        return;
+      }
+
       if (url.pathname === '/api/health') {
         if (method !== 'GET') {
           methodNotAllowed(res);
@@ -386,19 +448,46 @@ export function createServer() {
       await serveStatic(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Internal server error';
-      const statusCode = /필요|비어|올바르지|format|Invalid JSON|Payload too large/.test(message) ? 400 : 500;
+      if (requestId) {
+        const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
+        sendJson(res, statusCode, {
+          requestId,
+          error: {
+            code: typeof error?.code === 'string' ? error.code : 'BAD_REQUEST',
+            message,
+            details: [],
+            retryable: false
+          }
+        });
+        return;
+      }
+      const statusCode = Number.isInteger(error?.statusCode)
+        ? error.statusCode
+        : /필요|비어|올바르지|format|Invalid JSON|Payload too large/.test(message)
+          ? 400
+          : 500;
       if (statusCode >= 500) {
         console.error('[plc-review-server-error]', error);
       }
-      sendError(res, statusCode, statusCode === 400 ? 'bad_request' : 'internal_error', message);
+      sendError(
+        res,
+        statusCode,
+        typeof error?.code === 'string'
+          ? error.code.toLowerCase()
+          : statusCode >= 400 && statusCode < 500
+            ? 'bad_request'
+            : 'internal_error',
+        message
+      );
     }
   });
 }
 
 export function startServer({ port = Number(process.env.PORT || 4173), host = process.env.HOST || '127.0.0.1' } = {}) {
+  const localHost = assertLoopbackHost(host);
   const server = createServer();
-  server.listen(port, host, () => {
-    console.log(`PLC Review Assistant running on http://localhost:${port}`);
+  server.listen(port, localHost, () => {
+    console.log(`PLC Review Assistant running on http://${localHost}:${port}`);
   });
   return server;
 }

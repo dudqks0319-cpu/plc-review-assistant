@@ -3,6 +3,10 @@ import {
   createChangePlan as createLegacyChangePlan,
   VENDOR_PROFILES
 } from './plcChangeAssistant.js';
+import {
+  calculateTimerDuration,
+  getCpuProfile
+} from '../adapters/mitsubishi/deviceAddress.js';
 
 const HIGH_RISK_MACHINE_PROFILES = [
   {
@@ -79,11 +83,27 @@ function hasProjectEvidence(project) {
   );
 }
 
-function createReadiness({ analysis, sourceContent, blockedReason, highRiskMachine, simulation }) {
+function createReadiness({
+  analysis,
+  sourceContent,
+  blockedReason,
+  highRiskMachine,
+  simulation,
+  timerValidation
+}) {
   const project = analysis?.project || {};
   const hasSource = safeString(sourceContent).length > 0 && project?.source?.fileType !== 'natural-language-draft';
   const hasEvidence = hasProjectEvidence(project);
-  const level = blockedReason ? 'blocked' : highRiskMachine ? 'simulation-only' : hasSource ? 'engineer-review' : 'draft-only';
+  const timerUnknown = timerValidation?.status === 'unknown';
+  const level = blockedReason
+    ? 'blocked'
+    : highRiskMachine
+      ? 'simulation-only'
+      : timerUnknown
+        ? 'needs-profile'
+        : hasSource
+          ? 'engineer-review'
+          : 'draft-only';
 
   return {
     mode: hasSource ? 'existing-project-review' : 'new-circuit-draft',
@@ -93,6 +113,8 @@ function createReadiness({ analysis, sourceContent, blockedReason, highRiskMachi
       ? '안전 조건 때문에 회로 후보 생성을 중단했습니다.'
       : highRiskMachine
         ? `${highRiskMachine.label} 요청은 인명 안전과 관련될 수 있어 시뮬레이션 전용 초안만 제공합니다.`
+        : timerUnknown
+          ? 'CPU·타이머 기준이 확인되지 않아 시간값과 명령 후보를 생성하지 않았습니다.'
         : hasSource
           ? '기존 export를 참고한 수정 후보입니다. 컴파일과 현장 검증 전에는 사용할 수 없습니다.'
           : '기존 PLC 파일이 없는 신규 초안입니다. 주소와 태그는 아직 확인되지 않았습니다.',
@@ -111,6 +133,22 @@ function createReadiness({ analysis, sourceContent, blockedReason, highRiskMachi
           hasSource && hasEvidence
             ? '업로드된 export 범위에서 주소와 태그 후보를 확인했습니다.'
             : '실제 프로젝트의 사용 주소와 태그를 확인해야 합니다.'
+      },
+      {
+        id: 'timer-profile',
+        label: 'CPU·타이머 기준',
+        status:
+          timerValidation?.status === 'not-applicable'
+            ? 'not-applicable'
+            : timerValidation?.status === 'exact'
+              ? 'checked'
+              : 'unknown',
+        detail:
+          timerValidation?.status === 'not-applicable'
+            ? '이 요청에는 Mitsubishi 타이머 환산이 필요하지 않습니다.'
+            : timerValidation?.status === 'exact'
+              ? '검증된 CPU 타이머 프로필로 시간값을 계산했습니다.'
+              : '정확한 CPU 모델, 타이머 번호, 명령의 time base를 확인해야 합니다.'
       },
       {
         id: 'compile',
@@ -160,7 +198,7 @@ function addCircuitAssumptions(circuitDraft) {
     assumptions = [
       `${start}=ON은 시작 또는 감지 조건으로 가정합니다.`,
       `${stop}=ON은 정지 또는 인터락 요청으로 가정합니다.`,
-      'GX Works2 타이머 K값은 0.1초 타임베이스 후보이며 실제 CPU 설정을 확인해야 합니다.'
+      '타이머 시간값은 정확한 CPU·명령·타이머 번호의 time base가 검증된 뒤에만 생성해야 합니다.'
     ];
   }
 
@@ -273,6 +311,7 @@ function createPlanJson(plan) {
       delaySeconds: plan.normalizedRequirement?.delaySeconds,
       priorityRules: plan.normalizedRequirement?.priorityRules,
       simulation: plan.simulation,
+      timerValidation: plan.timerValidation,
       circuitDraft: plan.circuitDraft,
       warnings: plan.warnings
     },
@@ -291,8 +330,12 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
   const baseName = safeFilename(effectiveFilename);
   const hasSource = safeString(sourceContent).length > 0 && analysis?.project?.source?.fileType !== 'natural-language-draft';
   const files = [];
+  const timerUnknown = plan.timerValidation?.status === 'unknown';
 
-  if (plan.executionScope === 'simulation-only') {
+  if (timerUnknown) {
+    // A review record is still useful, but no instruction, CSV, diff, or simulator
+    // artifact may contain an invented Mitsubishi timer value.
+  } else if (plan.executionScope === 'simulation-only') {
     files.push({
       id: makeId('file', baseName, vendor, 'simulation'),
       filename: `${baseName}.simulation-draft.txt`,
@@ -308,18 +351,18 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
 
     if (hasSource) {
       const modifiedContent = createModifiedCandidate({ plan, vendor, sourceContent });
-      const modifiedExtension = vendor === 'siemens' ? 'candidate.xml' : 'candidate.lst';
+      const modifiedExtension = vendor === 'siemens' ? 'candidate.xml' : 'instruction-candidate.txt';
       files.push(
         {
           id: makeId('file', baseName, vendor, 'modified'),
           filename: `${baseName}.${modifiedExtension}`,
-          label: '수정 후보 프로그램',
+          label: vendor === 'siemens' ? '수정 후보 프로그램' : '원본과 분리된 검토용 명령 후보',
           mimeType: 'text/plain; charset=utf-8',
           content: modifiedContent
         },
         {
           id: makeId('file', baseName, vendor, 'diff'),
-          filename: `${baseName}.candidate.diff`,
+          filename: `${baseName}.${vendor === 'siemens' ? 'candidate' : 'before-after'}.diff`,
           label: '수정 전후 diff',
           mimeType: 'text/x-diff; charset=utf-8',
           content: createUnifiedDiff({
@@ -334,18 +377,18 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
     if (primaryPatch?.content) {
       files.push({
         id: makeId('file', baseName, vendor, 'patch'),
-        filename: `${baseName}.${vendor === 'siemens' ? 'candidate.scl' : 'candidate.csv'}`,
-        label: vendor === 'siemens' ? 'SCL 패치 후보' : 'GX Works2 CSV 후보',
+        filename: `${baseName}.${vendor === 'siemens' ? 'candidate.scl' : 'review-list.csv'}`,
+        label: vendor === 'siemens' ? 'SCL 패치 후보' : '검토용 CSV 목록 (Import 미검증)',
         mimeType: 'text/plain; charset=utf-8',
         content: primaryPatch.content
       });
     }
 
-    if (vendor === 'mitsubishi' && plan.circuitDraft) {
+    if (vendor === 'mitsubishi' && plan.circuitDraft && !hasSource) {
       files.push({
         id: makeId('file', baseName, vendor, 'gxworks2'),
-        filename: `${baseName}.gxworks2.lst`,
-        label: 'GX Works2 명령 리스트',
+        filename: `${baseName}.instruction-draft.txt`,
+        label: 'GX Works2 검토용 명령 초안 (Import 미검증)',
         mimeType: 'text/plain; charset=utf-8',
         content: formatCircuitDraft(plan.circuitDraft)
       });
@@ -354,7 +397,7 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
 
   files.push({
     id: makeId('file', baseName, vendor, 'json'),
-    filename: `${baseName}.change-plan.json`,
+    filename: `${baseName}.${hasSource ? 'change-proposal' : 'logic-draft'}.json`,
     label: '변경 계획 JSON',
     mimeType: 'application/json; charset=utf-8',
     content: createPlanJson(plan)
@@ -378,15 +421,51 @@ export function createChangePlan(options) {
   const requestText = safeString(options?.requestText, '', 4000);
   const highRiskMachine = detectHighRiskMachine(requestText);
   const blockedReason = basePlan?.recommendedPatch?.blockedReason || null;
-  const executionScope = blockedReason ? 'blocked' : highRiskMachine ? 'simulation-only' : 'engineering-candidate';
-  const circuitDraft = addCircuitAssumptions(basePlan.circuitDraft);
-  const riskLevel = blockedReason ? 'blocked' : highRiskMachine ? 'high' : basePlan.riskLevel;
+  const delaySeconds = Number(basePlan.normalizedRequirement?.delaySeconds || 0);
+  const cpuProfile = getCpuProfile(
+    options?.analysis?.snapshot?.cpuProfileId || options?.analysis?.project?.cpuProfileId
+  );
+  const timerValidation =
+    basePlan.vendor !== 'mitsubishi' || delaySeconds <= 0
+      ? { status: 'not-applicable', seconds: null, reason: null }
+      : calculateTimerDuration({
+          timerAddress: 'T0',
+          preset: 'K1',
+          cpuProfile
+        });
+  const timerUnknown = timerValidation.status === 'unknown';
+  const executionScope = blockedReason
+    ? 'blocked'
+    : highRiskMachine
+      ? 'simulation-only'
+      : timerUnknown
+        ? 'review-only'
+        : 'engineering-candidate';
+  const circuitDraft = timerUnknown ? null : addCircuitAssumptions(basePlan.circuitDraft);
+  const riskLevel = blockedReason
+    ? 'blocked'
+    : highRiskMachine
+      ? 'high'
+      : timerUnknown
+        ? 'medium'
+        : basePlan.riskLevel;
+  const simulation = timerUnknown
+    ? {
+        result: 'not-run',
+        harness: 'not-run',
+        reason: timerValidation.reason,
+        timerPresetSeconds: null,
+        timeline: [],
+        truthTable: []
+      }
+    : basePlan.simulation;
   const readiness = createReadiness({
     analysis: options?.analysis,
     sourceContent: options?.sourceContent,
     blockedReason,
     highRiskMachine,
-    simulation: basePlan.simulation
+    simulation,
+    timerValidation
   });
   const warnings = [...(basePlan.warnings || [])];
 
@@ -399,10 +478,17 @@ export function createChangePlan(options) {
   if (readiness.mode === 'new-circuit-draft') {
     warnings.push('기존 PLC 파일이 없어 주소 충돌, 태그 중복, 블록 영향은 확인되지 않았습니다.');
   }
+  if (timerUnknown) {
+    warnings.unshift(
+      'CPU·명령·타이머 번호별 time base가 확인되지 않아 Mitsubishi 타이머 K값과 회로 후보를 생성하지 않았습니다.'
+    );
+  }
 
   const plan = {
     ...basePlan,
     circuitDraft,
+    timerValidation,
+    simulation,
     riskLevel,
     executionScope,
     highRiskMachine,
@@ -412,19 +498,42 @@ export function createChangePlan(options) {
         ? ['안전 담당자', 'PLC 담당자', '현장 책임자']
         : basePlan.approvalsRequired,
     warnings: [...new Set(warnings)],
+    expectedBehavior: timerUnknown
+      ? [
+          `${basePlan.normalizedRequirement?.delaySeconds || 0}초 지연은 사용자의 요구사항이며 아직 PLC 타이머 값으로 환산되지 않았습니다.`,
+          '검증된 CPU·타이머 프로필이 등록되기 전에는 시간값과 동작 통과를 단정하지 않습니다.',
+          '기존 정지·비상정지·인터락 조건은 언제나 우선해야 합니다.'
+        ]
+      : basePlan.expectedBehavior,
+    testCases: timerUnknown ? [] : basePlan.testCases,
     recommendedPatch: {
       ...basePlan.recommendedPatch,
-      status: executionScope === 'simulation-only' ? 'simulation-only' : basePlan.recommendedPatch.status,
+      status: timerUnknown
+        ? 'needs-verification'
+        : executionScope === 'simulation-only'
+          ? 'simulation-only'
+          : basePlan.recommendedPatch.status,
+      patchArtifacts: timerUnknown ? [] : basePlan.recommendedPatch.patchArtifacts,
       title:
-        executionScope === 'simulation-only'
+        timerUnknown
+          ? 'CPU·타이머 기준 확인 필요'
+          : executionScope === 'simulation-only'
           ? '시뮬레이션 전용 회로 초안'
           : basePlan.recommendedPatch.title,
       summary:
-        executionScope === 'simulation-only'
+        timerUnknown
+          ? '검증된 time base가 없어 시간값을 포함한 명령 후보를 생성하지 않았습니다.'
+          : executionScope === 'simulation-only'
           ? `${highRiskMachine.label} 요청은 실제 적용 후보 대신 교육·검토용 시뮬레이션 초안만 제공합니다.`
           : basePlan.recommendedPatch.summary,
       manualSteps:
-        executionScope === 'simulation-only'
+        timerUnknown
+          ? [
+              '정확한 Mitsubishi CPU 모델을 선택합니다.',
+              '사용할 타이머 번호와 명령의 time base를 공식 매뉴얼에서 확인합니다.',
+              '검증된 프로필이 등록된 뒤 명령 후보와 테스트를 다시 생성합니다.'
+            ]
+          : executionScope === 'simulation-only'
           ? highRiskManualSteps(highRiskMachine)
           : basePlan.recommendedPatch.manualSteps
     },
@@ -434,7 +543,9 @@ export function createChangePlan(options) {
             {
               area: circuitDraft?.title || basePlan.beforeAfterDiff?.[0]?.area || '신규 회로',
               before: '기존 PLC 회로가 제공되지 않았습니다.',
-              after: '자연어 요구사항을 바탕으로 검토용 신규 회로 초안을 생성했습니다.'
+              after: timerUnknown
+                ? 'CPU·타이머 기준 확인 전에는 시간값을 포함한 회로를 생성하지 않습니다.'
+                : '자연어 요구사항을 바탕으로 검토용 신규 회로 초안을 생성했습니다.'
             }
           ]
         : basePlan.beforeAfterDiff

@@ -3,7 +3,11 @@ const elements = {
   fileInput: document.getElementById('project-file'),
   fileName: document.getElementById('file-name'),
   fileMeta: document.getElementById('file-meta'),
+  fileList: document.getElementById('file-list'),
   clearFile: document.getElementById('clear-file'),
+  cpuProfile: document.getElementById('cpu-profile'),
+  fileEncoding: document.getElementById('file-encoding'),
+  mitsubishiImportOptions: document.getElementById('mitsubishi-import-options'),
   changeButton: document.getElementById('change-button'),
   changeRequest: document.getElementById('change-request'),
   safetyAck: document.getElementById('safety-ack'),
@@ -14,6 +18,7 @@ const elements = {
   analysisView: document.getElementById('analysis-view'),
   readinessView: document.getElementById('readiness-view'),
   assistantSummary: document.getElementById('assistant-summary'),
+  importReview: document.getElementById('import-review'),
   metrics: {
     blocks: document.getElementById('metric-blocks'),
     variables: document.getElementById('metric-variables'),
@@ -32,7 +37,7 @@ const elements = {
   exampleButtons: [...document.querySelectorAll('[data-example]')]
 };
 
-let selectedFile = null;
+let selectedFiles = [];
 let currentAnalysis = null;
 let currentChangePlan = null;
 let currentSourceContent = '';
@@ -57,6 +62,10 @@ function setMessage(text, tone = 'neutral') {
 function selectedAssistantVendor() {
   const value = new FormData(elements.form).get('assistant-version');
   return value === 'siemens' ? 'siemens' : 'mitsubishi';
+}
+
+function selectedCpuProfile() {
+  return selectedAssistantVendor() === 'mitsubishi' ? elements.cpuProfile.value || null : null;
 }
 
 function formatBytes(bytes) {
@@ -133,10 +142,10 @@ function createDraftAnalysis(vendor, requestText) {
 }
 
 function updateModeHint() {
-  if (selectedFile) {
+  if (selectedFiles.length) {
     elements.modeHint.dataset.mode = 'file';
     elements.modeHint.textContent =
-      '기존 파일 검토 모드 · 파일을 먼저 분석하고 주소·태그·블록을 참고해 수정 후보를 만듭니다.';
+      `기존 파일 검토 모드 · ${selectedFiles.length}개 export를 하나의 읽기 전용 스냅샷으로 묶어 검토합니다.`;
     return;
   }
 
@@ -150,7 +159,7 @@ function updatePrimaryState() {
   const acknowledged = elements.safetyAck.checked;
   elements.changeButton.disabled = busy || !hasRequest || !acknowledged;
   elements.changeButton.textContent = busy
-    ? selectedFile
+    ? selectedFiles.length
       ? '파일 분석하고 회로 만드는 중…'
       : '회로 초안 만드는 중…'
     : '안전한 회로 초안 만들기';
@@ -176,7 +185,9 @@ function statusLabel(status) {
     blocked: '중단',
     'basic-pass': '간이 통과',
     pass: '통과',
-    fail: '실패'
+    fail: '실패',
+    'not-run': '실행 안 함',
+    'not-applicable': '해당 없음'
   };
   return labels[status] || status || '확인 필요';
 }
@@ -190,6 +201,9 @@ function readinessTitle(readiness) {
   }
   if (readiness.level === 'simulation-only') {
     return '시뮬레이션 전용 초안입니다';
+  }
+  if (readiness.level === 'needs-profile') {
+    return 'CPU·타이머 기준을 먼저 확인해 주세요';
   }
   if (readiness.mode === 'existing-project-review') {
     return '기존 파일을 참고한 수정 후보입니다';
@@ -239,7 +253,7 @@ function renderFindings(findings = []) {
       createElement(
         'p',
         'empty-panel-copy',
-        selectedFile ? '업로드한 export 범위에서 표시할 문제 후보가 없습니다.' : '기존 파일을 넣으면 주소 중복과 주석 누락 등을 확인합니다.'
+        selectedFiles.length ? '업로드한 export 범위에서 표시할 문제 후보가 없습니다.' : '기존 파일을 넣으면 주소 중복과 주석 누락 등을 확인합니다.'
       )
     );
     return;
@@ -402,6 +416,8 @@ function renderChangePlan(changePlan) {
       '',
       changePlan.executionScope === 'simulation-only'
         ? '시뮬레이션 전용'
+        : changePlan.executionScope === 'review-only'
+          ? '기준 확인 전 검토만'
         : changePlan.readiness?.mode === 'existing-project-review'
           ? '기존 파일 검토'
           : '신규 초안'
@@ -508,6 +524,7 @@ function renderAnalysis(analysis, changePlan = null) {
   elements.metrics.io.textContent = analysis.summary?.ioAddressCount ?? 0;
   elements.metrics.findings.textContent = analysis.findings?.length ?? 0;
   elements.assistantSummary.textContent = analysis.assistantSummary || '분석 설명이 없습니다.';
+  renderImportReview(analysis);
   renderFindings(analysis.findings || []);
   renderBlocks(analysis.project?.blocks || []);
   renderVariables(analysis.project || {});
@@ -518,23 +535,191 @@ function renderAnalysis(analysis, changePlan = null) {
   });
 }
 
-async function analyzeSelectedFile(vendor) {
-  if (!selectedFile) {
+function bytesToBase64(bytes) {
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function primaryFile(files) {
+  const rank = (file) => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    return extension === 'lst' || extension === 'txt' || extension === 'asc' ? 0 : 1;
+  };
+  return [...files].sort((left, right) => rank(left) - rank(right))[0];
+}
+
+function bundleRecordToAnalysis(record, workspace, sourceFile) {
+  const snapshot = record.snapshot;
+  const variables = snapshot.devices.map((device) => ({
+    id: device.id,
+    name: device.label || device.canonicalAddress,
+    address: device.canonicalAddress,
+    dataType: device.family || device.kind || 'device',
+    kind: device.kind || device.family || 'device',
+    comment: device.comment || '',
+    usageCount: snapshot.references.filter(
+      (reference) => reference.canonicalAddress === device.canonicalAddress
+    ).length
+  }));
+  const parserWarnings = snapshot.parseWarnings.map((warning) =>
+    typeof warning === 'string' ? warning : warning.message || warning.code || '확인되지 않은 구문'
+  );
+  const instructionCount = snapshot.programs.reduce(
+    (programTotal, program) =>
+      programTotal +
+      (program.networks || []).reduce(
+        (networkTotal, network) => networkTotal + (network.instructions || []).length,
+        0
+      ),
+    0
+  );
+
+  return {
+    id: snapshot.id,
+    snapshot,
+    importReview: {
+      artifacts: snapshot.artifacts,
+      artifactResults: record.artifactResults || [],
+      warnings: parserWarnings,
+      reused: Boolean(record.reused)
+    },
+    project: {
+      id: workspace.id,
+      name: workspace.name,
+      vendor: snapshot.vendor,
+      cpuProfileId: snapshot.cpuProfileId,
+      source: {
+        filename: sourceFile.name,
+        fileType: 'project-bundle',
+        detectedBy: 'api-v2-bundle'
+      },
+      blocks: snapshot.programs.map((program) => ({
+        id: program.id,
+        name: program.name,
+        type: program.kind,
+        language: program.language,
+        protected: false
+      })),
+      variables,
+      ioAddresses: variables.map((variable) => variable.address),
+      callGraph: snapshot.callEdges,
+      protectedItems: [],
+      parserWarnings
+    },
+    summary: {
+      blockCount: snapshot.programs.length,
+      variableCount: variables.length,
+      ioAddressCount: variables.length,
+      callEdgeCount: snapshot.callEdges.length,
+      protectedItemCount: 0,
+      instructionCount,
+      severityCounts: { high: 0, medium: 0, low: 0, info: 0 },
+      languageDistribution: { 'instruction-list': snapshot.programs.length }
+    },
+    findings: record.findings || [],
+    assistantSummary: [
+      `Mitsubishi export ${snapshot.artifacts.length}개를 메모리 전용 스냅샷으로 분석했습니다.`,
+      `CPU 계열: ${snapshot.cpuProfileId || '미확인'}`,
+      `프로그램 ${snapshot.programs.length}개 · 명령 ${instructionCount}개 · 디바이스 ${snapshot.devices.length}개`,
+      parserWarnings.length ? `파서 확인 항목 ${parserWarnings.length}개가 있습니다.` : '파서 경고가 없습니다.',
+      '원본 파일과 PLC에는 어떤 변경도 하지 않았습니다.'
+    ].join('\n'),
+    limitations: [
+      '분석 범위는 사용자가 선택한 export 파일에 한정됩니다.',
+      '보호 블록과 벤더 전용 바이너리 프로젝트 내부는 읽지 않습니다.',
+      '실행 순서, 간접 주소, 타이머 기준이 불명확하면 확인 필요로 표시합니다.',
+      '벤더 툴 컴파일, 시뮬레이터 검증, PLC 담당자 승인이 별도로 필요합니다.'
+    ]
+  };
+}
+
+function renderImportReview(analysis) {
+  elements.importReview.replaceChildren(createElement('h3', '', '가져오기 검토'));
+  const review = analysis.importReview;
+  if (!review?.artifacts?.length) {
+    elements.importReview.append(
+      createElement('p', 'empty-panel-copy', '단일 파일 또는 자연어 초안입니다.')
+    );
+    return;
+  }
+  const tableHost = createElement('div');
+  renderTable(
+    tableHost,
+    ['파일', '인코딩', '크기', '내용 해시'],
+    review.artifacts.map((artifact) => [
+      artifact.filename,
+      artifact.encoding || 'utf-8',
+      formatBytes(artifact.sizeBytes || 0),
+      String(artifact.contentHash || '').slice(0, 12)
+    ]),
+    '가져온 파일이 없습니다.'
+  );
+  elements.importReview.append(tableHost);
+  if (review.warnings?.length) {
+    appendList(elements.importReview, review.warnings, 'warning-list');
+  }
+}
+
+async function analyzeSelectedFiles(vendor) {
+  if (!selectedFiles.length) {
     return null;
   }
 
-  setMessage('1/2 · 기존 PLC 파일을 읽고 있습니다.');
-  const content = await selectedFile.text();
-  currentSourceContent = content;
-  const response = await requestJson('/api/v1/analyses', {
+  if (vendor === 'siemens') {
+    if (selectedFiles.length !== 1 || !selectedFiles[0].name.toLowerCase().endsWith('.xml')) {
+      throw new Error('Siemens 검토는 TIA Portal XML 파일 1개만 선택해 주세요.');
+    }
+    setMessage('1/2 · Siemens XML 파일을 읽고 있습니다.');
+    currentSourceContent = await selectedFiles[0].text();
+    const response = await requestJson('/api/v1/analyses', {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: selectedFiles[0].name,
+        vendor,
+        content: currentSourceContent
+      })
+    });
+    currentAnalysis = response.data;
+    return currentAnalysis;
+  }
+
+  setMessage(`1/2 · Mitsubishi export ${selectedFiles.length}개를 읽고 있습니다.`);
+  const artifacts = await Promise.all(
+    selectedFiles.map(async (file) => ({
+      filename: file.name,
+      contentBase64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+      encoding: elements.fileEncoding.value
+    }))
+  );
+  const sourceFile = primaryFile(selectedFiles);
+  currentSourceContent = await sourceFile.text();
+  const workspaceResponse = await requestJson('/api/v2/workspaces', {
     method: 'POST',
     body: JSON.stringify({
-      filename: selectedFile.name,
+      name: sourceFile.name.replace(/\.[^.]+$/, '') || 'Mitsubishi review',
       vendor,
-      content
+      cpuProfileId: selectedCpuProfile()
     })
   });
-  currentAnalysis = response.data;
+  const importResponse = await requestJson(
+    `/api/v2/workspaces/${encodeURIComponent(workspaceResponse.data.id)}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        cpuProfileId: selectedCpuProfile(),
+        artifacts
+      })
+    }
+  );
+  currentAnalysis = bundleRecordToAnalysis(
+    importResponse.data,
+    workspaceResponse.data,
+    sourceFile
+  );
   return currentAnalysis;
 }
 
@@ -559,19 +744,19 @@ async function createChangePlan(event) {
   const vendor = selectedAssistantVendor();
 
   try {
-    const analysis = selectedFile
-      ? await analyzeSelectedFile(vendor)
+    const analysis = selectedFiles.length
+      ? await analyzeSelectedFiles(vendor)
       : createDraftAnalysis(vendor, requestText);
-    setMessage(selectedFile ? '2/2 · 수정 후보와 안전 확인표를 만들고 있습니다.' : '회로 초안과 안전 확인표를 만들고 있습니다.');
+    setMessage(selectedFiles.length ? '2/2 · 수정 후보와 안전 확인표를 만들고 있습니다.' : '회로 초안과 안전 확인표를 만들고 있습니다.');
 
     const payload = {
       vendor,
       requestText
     };
-    if (selectedFile) {
+    if (selectedFiles.length) {
       payload.analysis = analysis;
       payload.sourceContent = currentSourceContent;
-      payload.sourceFilename = selectedFile.name;
+      payload.sourceFilename = primaryFile(selectedFiles).name;
     }
 
     const response = await requestJson('/api/v1/change-plans', {
@@ -587,7 +772,9 @@ async function createChangePlan(event) {
       setMessage('안전 조건 때문에 자동 생성을 중단했습니다. 결과의 이유를 확인해 주세요.', 'error');
     } else if (currentChangePlan.executionScope === 'simulation-only') {
       setMessage('시뮬레이션 전용 초안을 만들었습니다. 실제 설비에는 반영할 수 없습니다.', 'warning');
-    } else if (selectedFile) {
+    } else if (currentChangePlan.executionScope === 'review-only') {
+      setMessage('CPU·타이머 기준 확인 전에는 시간값이 있는 회로 후보를 만들지 않습니다.', 'warning');
+    } else if (selectedFiles.length) {
       setMessage('기존 파일을 참고한 수정 후보를 만들었습니다. 원본 파일은 바뀌지 않았습니다.', 'success');
     } else {
       setMessage('새 회로 초안을 만들었습니다. 실제 주소와 태그는 PLC 담당자가 확인해야 합니다.', 'success');
@@ -658,20 +845,31 @@ async function checkHealth() {
 }
 
 function handleFileSelection() {
-  selectedFile = elements.fileInput.files?.[0] || null;
+  selectedFiles = [...(elements.fileInput.files || [])];
   resetResults();
 
-  if (!selectedFile) {
+  if (!selectedFiles.length) {
     elements.fileName.textContent = 'PLC export 파일 선택';
-    elements.fileMeta.textContent = 'GX Works2 CSV/TXT/LST 또는 TIA Portal XML';
+    elements.fileMeta.textContent = 'GX Works2는 CSV/TXT/LST/ASC 여러 개, Siemens는 XML 1개';
+    elements.fileList.replaceChildren();
+    elements.fileList.classList.add('hidden');
     elements.clearFile.classList.add('hidden');
     updateModeHint();
     updatePrimaryState();
     return;
   }
 
-  elements.fileName.textContent = selectedFile.name;
-  elements.fileMeta.textContent = `${formatBytes(selectedFile.size)} · 원본은 수정하지 않습니다`;
+  elements.fileName.textContent =
+    selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length}개 파일 선택됨`;
+  elements.fileMeta.textContent = `${formatBytes(
+    selectedFiles.reduce((total, file) => total + file.size, 0)
+  )} · 원본은 수정하지 않습니다`;
+  elements.fileList.replaceChildren(
+    ...selectedFiles.map((file) =>
+      createElement('li', '', `${file.name} · ${formatBytes(file.size)}`)
+    )
+  );
+  elements.fileList.classList.remove('hidden');
   elements.clearFile.classList.remove('hidden');
   updateModeHint();
   updatePrimaryState();
@@ -687,6 +885,14 @@ elements.clearFile.addEventListener('click', () => {
 });
 elements.changeRequest.addEventListener('input', updatePrimaryState);
 elements.safetyAck.addEventListener('change', updatePrimaryState);
+elements.cpuProfile.addEventListener('change', () => {
+  resetResults();
+  setMessage('CPU 계열을 바꿨습니다. 다시 분석하면 새 기준이 적용됩니다.');
+});
+elements.fileEncoding.addEventListener('change', () => {
+  resetResults();
+  setMessage('파일 문자 인코딩을 바꿨습니다. 다시 분석해 주세요.');
+});
 elements.exampleButtons.forEach((button) => {
   button.addEventListener('click', () => {
     elements.changeRequest.value = button.dataset.example || '';
@@ -698,6 +904,7 @@ elements.exampleButtons.forEach((button) => {
 document.querySelectorAll('input[name="assistant-version"]').forEach((input) => {
   input.addEventListener('change', () => {
     resetResults();
+    elements.mitsubishiImportOptions.classList.toggle('hidden', input.value !== 'mitsubishi');
     updateModeHint();
     setMessage(`${input.value === 'siemens' ? 'Siemens PLC' : 'Mitsubishi GX Works2'}를 선택했습니다.`);
   });

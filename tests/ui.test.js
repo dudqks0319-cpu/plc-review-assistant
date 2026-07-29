@@ -33,3 +33,21 @@ test('results UI exposes readiness checks and accessible focus styles', () => {
   assert.match(stylesCss, /:focus-visible/);
   assert.match(stylesCss, /@media \(max-width: 720px\)/);
 });
+
+test('Mitsubishi Project Bundle UI accepts multiple files and explicit CPU and encoding choices', () => {
+  assert.match(indexHtml, /id="project-file"[\s\S]*multiple/);
+  assert.match(indexHtml, /id="cpu-profile"/);
+  assert.match(indexHtml, /value="mitsubishi-fx3"/);
+  assert.match(indexHtml, /id="file-encoding"/);
+  assert.match(indexHtml, /value="cp949"/);
+  assert.match(indexHtml, /id="import-review"/);
+  assert.match(appJs, /\/api\/v2\/workspaces/);
+  assert.match(appJs, /contentBase64/);
+  assert.match(appJs, /bundleRecordToAnalysis/);
+});
+
+test('review UI explains unverified timer profiles instead of presenting executable values', () => {
+  assert.match(appJs, /needs-profile/);
+  assert.match(appJs, /review-only/);
+  assert.match(appJs, /CPU·타이머 기준/);
+});

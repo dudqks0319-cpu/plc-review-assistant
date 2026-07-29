@@ -53,7 +53,7 @@ test('createChangePlan builds Siemens SCL patch candidates and timer harness res
   assert.equal(changePlan.readiness.canWriteToPlc, false);
 });
 
-test('createChangePlan puts the GX Works2 instruction list inside an uploaded Mitsubishi candidate program', () => {
+test('createChangePlan does not invent a Mitsubishi timer preset without an exact CPU timer profile', () => {
   const analysis = analyzePlcProject({
     filename: 'labels.csv',
     vendor: 'mitsubishi',
@@ -67,16 +67,26 @@ test('createChangePlan puts the GX Works2 instruction list inside an uploaded Mi
     sourceFilename: 'labels.csv'
   });
 
-  const modifiedCandidate = changePlan.candidateFiles.find((file) => file.filename === 'labels.candidate.lst');
-
   assert.equal(changePlan.version, 'mitsubishi-change-assistant');
-  assert.equal(changePlan.recommendedPatch.status, 'candidate');
-  assert.equal(changePlan.recommendedPatch.patchArtifacts.some((artifact) => artifact.content.includes('OUT T201 K30')), true);
-  assert.ok(modifiedCandidate);
-  assert.match(modifiedCandidate.content, /OUT T201 K30/);
-  assert.match(modifiedCandidate.content, /Review in a GX Works2 offline project/);
-  assert.doesNotMatch(modifiedCandidate.content, /GX Works3/);
-  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.candidate.csv'), true);
+  assert.equal(changePlan.timerValidation.status, 'unknown');
+  assert.equal(changePlan.timerValidation.reason, 'CPU_PROFILE_REQUIRED');
+  assert.equal(changePlan.recommendedPatch.status, 'needs-verification');
+  assert.equal(changePlan.recommendedPatch.patchArtifacts.length, 0);
+  assert.equal(changePlan.circuitDraft, null);
+  assert.equal(changePlan.simulation.result, 'not-run');
+  assert.deepEqual(changePlan.simulation.timeline, []);
+  assert.deepEqual(changePlan.simulation.truthTable, []);
+  assert.deepEqual(changePlan.testCases, []);
+  assert.equal(changePlan.executionScope, 'review-only');
+  assert.equal(changePlan.readiness.level, 'needs-profile');
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.instruction-candidate.txt'), false);
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.review-list.csv'), false);
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.before-after.diff'), false);
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'labels.change-proposal.json'), true);
+  assert.equal(
+    changePlan.candidateFiles.some((file) => /OUT\s+T\d+\s+K\d+/i.test(file.content)),
+    false
+  );
   assert.equal(changePlan.simulatorTarget.includes('GX Works2'), true);
 });
 
@@ -117,13 +127,13 @@ test('createChangePlan builds file-less GX Works2 self-holding drafts without pr
   assert.equal(changePlan.circuitDraft.ladderPreview[0].ascii.includes('HOLD'), true);
   assert.equal(changePlan.normalizedRequirement.targetOutput.address, 'Y0');
   assert.equal(changePlan.affectedElements[0].address, 'Y0');
-  assert.equal(changePlan.beforeAfterDiff[0].area, 'Y0');
+  assert.equal(changePlan.beforeAfterDiff[0].area, changePlan.circuitDraft.title);
   assert.equal(changePlan.circuitDraft.assumptions.some((item) => item.includes('X1=ON')), true);
   assert.equal(changePlan.readiness.mode, 'new-circuit-draft');
   assert.equal(changePlan.readiness.checks.find((item) => item.id === 'addresses').status, 'unknown');
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.candidate.lst'), false);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.candidate.diff'), false);
-  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.gxworks2.lst'), true);
+  assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.instruction-draft.txt'), true);
 });
 
 test('createChangePlan restricts elevator drafts to simulation-only output', () => {

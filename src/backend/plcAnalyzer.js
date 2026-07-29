@@ -1,4 +1,12 @@
 import { createHash } from 'node:crypto';
+import { getCpuProfile, parseDeviceAddress } from '../adapters/mitsubishi/deviceAddress.js';
+import { parseInstructionList } from '../adapters/mitsubishi/instructionListAdapter.js';
+import {
+  createArtifact,
+  createSourceAnchor,
+  hashContent,
+  lineNumberAt
+} from '../domain/sourceAnchor.js';
 
 const SUPPORTED_XML_BLOCK_TYPES = new Set(['FB', 'FC', 'OB', 'DB', 'UDT']);
 const SIEMENS_IO_PATTERN = /%?\b(?:I|Q|M)(?:B|W|D)?\d+(?:\.\d+)?\b|%?\bDB\d+\.DB(?:X|B|W|D)\d+(?:\.\d+)?\b/gi;
@@ -231,6 +239,14 @@ function normalizeVendor(inputVendor, fileType, content) {
 
 function makeProjectBase({ filename, vendor, fileType, content, parserWarnings = [] }) {
   const id = buildId('project', filename, content.slice(0, 4000));
+  const artifact = createArtifact({ filename, content });
+  const sourceAnchor = createSourceAnchor({
+    artifactId: artifact.id,
+    filename: artifact.filename,
+    rawSnippet: content,
+    lineStart: 1,
+    lineEnd: countLines(content)
+  });
 
   return {
     id,
@@ -241,19 +257,27 @@ function makeProjectBase({ filename, vendor, fileType, content, parserWarnings =
       fileType,
       sizeBytes: Buffer.byteLength(content, 'utf8'),
       lineCount: countLines(content),
+      artifactId: artifact.id,
+      contentHash: artifact.contentHash,
       parserWarnings
     },
+    artifact,
+    sourceAnchor,
     blocks: [],
     variables: [],
     ioAddresses: [],
+    programs: [],
     networks: [],
     instructions: [],
+    canonicalDevices: [],
+    deviceReferences: [],
+    unknownInstructions: [],
     callGraph: [],
     protectedItems: []
   };
 }
 
-function addIoAddress(project, address, owner = 'raw-scan', source = 'content') {
+function addIoAddress(project, address, owner = 'raw-scan', source = 'content', sourceAnchor = project.sourceAnchor) {
   const normalized = normalizeAddress(address);
   if (!normalized) {
     return;
@@ -269,7 +293,8 @@ function addIoAddress(project, address, owner = 'raw-scan', source = 'content') 
     address: normalized,
     direction: addressDirection(normalized),
     owner: safeString(owner, 'raw-scan', 160),
-    source
+    source,
+    sourceAnchor
   });
 }
 
@@ -287,6 +312,7 @@ function addVariable(project, variable, content) {
     scope: safeString(variable.scope, 'global', 80),
     blockName: safeString(variable.blockName, '', 120),
     sourceLine: Number.isInteger(variable.sourceLine) ? variable.sourceLine : null,
+    sourceAnchor: variable.sourceAnchor || project.sourceAnchor,
     usageCount: countNameUsage(content, name)
   };
 
@@ -295,7 +321,7 @@ function addVariable(project, variable, content) {
   }
 
   if (address) {
-    addIoAddress(project, address, name, 'variable');
+    addIoAddress(project, address, name, 'variable', normalized.sourceAnchor);
   }
 }
 
@@ -316,6 +342,7 @@ function addBlock(project, block) {
     comment: safeString(block.comment, '', 500),
     protected: Boolean(block.protected),
     source: safeString(block.source, 'export', 80),
+    sourceAnchor: block.sourceAnchor || project.sourceAnchor,
     callTargets: Array.isArray(block.callTargets) ? block.callTargets : []
   });
 }
@@ -329,6 +356,14 @@ function parseSiemensXml({ filename, vendor, fileType, content }) {
     const blockType = inferSiemensBlockType(tag.tagName, tag.attributes);
 
     if (name && blockType) {
+      const sourceAnchor = createSourceAnchor({
+        artifactId: project.artifact.id,
+        filename: project.source.filename,
+        rawSnippet: tag.raw,
+        lineStart: lineNumberAt(content, tag.index),
+        byteStart: tag.index,
+        byteEnd: tag.index + tag.raw.length
+      });
       addBlock(project, {
         name,
         type: blockType,
@@ -336,7 +371,8 @@ function parseSiemensXml({ filename, vendor, fileType, content }) {
         comment: pickAttribute(tag.attributes, ['Comment', 'Description', 'comment']),
         protected: PROTECTED_PATTERN.test(tag.raw),
         source: 'siemens-xml',
-        sourceIndex: tag.index
+        sourceIndex: tag.index,
+        sourceAnchor
       });
       continue;
     }
@@ -355,7 +391,15 @@ function parseSiemensXml({ filename, vendor, fileType, content }) {
         dataType: pickAttribute(tag.attributes, ['Datatype', 'DataType', 'Type', 'TypeName']),
         address: pickAttribute(tag.attributes, ['Address', 'LogicalAddress', 'Operand', 'AbsoluteAddress']),
         comment: pickAttribute(tag.attributes, ['Comment', 'Description', 'comment']),
-        scope: pickAttribute(tag.attributes, ['Scope', 'Section']) || 'global'
+        scope: pickAttribute(tag.attributes, ['Scope', 'Section']) || 'global',
+        sourceAnchor: createSourceAnchor({
+          artifactId: project.artifact.id,
+          filename: project.source.filename,
+          rawSnippet: tag.raw,
+          lineStart: lineNumberAt(content, tag.index),
+          byteStart: tag.index,
+          byteEnd: tag.index + tag.raw.length
+        })
       },
       content
     );
@@ -366,7 +410,8 @@ function parseSiemensXml({ filename, vendor, fileType, content }) {
     project.protectedItems.push({
       id: buildId('protected', filename, protectedMatches[0]),
       name: protectedMatches[0],
-      reason: 'Protected or encrypted PLC item was detected and excluded from interpretation.'
+      reason: 'Protected or encrypted PLC item was detected and excluded from interpretation.',
+      sourceAnchor: project.sourceAnchor
     });
   }
 
@@ -493,6 +538,13 @@ function parseMitsubishiCsv({ filename, vendor, fileType, content }) {
     const name = pickColumn(row, ['Label Name', 'Label', 'Name', 'Device Name', 'Symbol']);
     const address = pickColumn(row, ['Device', 'Address', 'Device/Label', 'PLC Device']);
     const program = pickColumn(row, ['Program', 'POU', 'Block', 'Task']);
+    const rawLine = content.split(/\r\n|\n|\r/)[row.__line - 1] || '';
+    const sourceAnchor = createSourceAnchor({
+      artifactId: project.artifact.id,
+      filename: project.source.filename,
+      rawSnippet: rawLine,
+      lineStart: row.__line
+    });
 
     if (program && !blockNames.has(program)) {
       blockNames.add(program);
@@ -500,7 +552,8 @@ function parseMitsubishiCsv({ filename, vendor, fileType, content }) {
         name: program,
         type: 'PROGRAM',
         language: 'LAD',
-        source: 'mitsubishi-csv'
+        source: 'mitsubishi-csv',
+        sourceAnchor
       });
     }
 
@@ -517,7 +570,8 @@ function parseMitsubishiCsv({ filename, vendor, fileType, content }) {
         address,
         comment: pickColumn(row, ['Comment', 'Description', 'Remark']),
         scope: program || 'global',
-        sourceLine: row.__line
+        sourceLine: row.__line,
+        sourceAnchor
       },
       content
     );
@@ -530,7 +584,7 @@ function parseMitsubishiCsv({ filename, vendor, fileType, content }) {
   return project;
 }
 
-function parseMitsubishiText({ filename, vendor, fileType, content }) {
+function parseMitsubishiText({ filename, vendor, fileType, content, cpuProfile }) {
   const project = makeProjectBase({ filename, vendor, fileType, content });
   const lines = content.split(/\r\n|\n|\r/);
   let activeBlock = '';
@@ -561,6 +615,12 @@ function parseMitsubishiText({ filename, vendor, fileType, content }) {
     const firstAddress = addressMatch[0];
     const nameMatch = trimmed.match(/^([A-Za-z_][\w$]*)\b/);
     const commentMatch = trimmed.match(/(?:\/\/|;|#)\s*(.+)$/);
+    const sourceAnchor = createSourceAnchor({
+      artifactId: project.artifact.id,
+      filename: project.source.filename,
+      rawSnippet: line,
+      lineStart: index + 1
+    });
     addVariable(
       project,
       {
@@ -569,15 +629,29 @@ function parseMitsubishiText({ filename, vendor, fileType, content }) {
         address: firstAddress,
         comment: commentMatch ? commentMatch[1] : '',
         scope: activeBlock || 'global',
-        sourceLine: index + 1
+        sourceLine: index + 1,
+        sourceAnchor
       },
       content
     );
 
     for (const address of addressMatch) {
-      addIoAddress(project, address, nameMatch?.[1] || 'raw-scan', 'text-line');
+      addIoAddress(project, address, nameMatch?.[1] || 'raw-scan', 'text-line', sourceAnchor);
     }
   });
+
+  const instructionResult = parseInstructionList({
+    artifactId: project.artifact.id,
+    filename: project.source.filename,
+    content,
+    cpuProfile
+  });
+  project.programs = instructionResult.programs;
+  project.networks = instructionResult.programs.flatMap((program) => program.networks);
+  project.instructions = project.networks.flatMap((network) => network.instructions);
+  project.canonicalDevices = instructionResult.devices;
+  project.deviceReferences = instructionResult.references;
+  project.unknownInstructions = instructionResult.unknownInstructions;
 
   return project;
 }
@@ -599,7 +673,8 @@ function parseUnsupported({ filename, vendor, fileType, content }) {
     project.protectedItems.push({
       id: buildId('protected', filename, 'unsupported'),
       name: 'Protected content marker',
-      reason: 'Protected content was detected and excluded from interpretation.'
+      reason: 'Protected content was detected and excluded from interpretation.',
+      sourceAnchor: project.sourceAnchor
     });
   }
 
@@ -622,120 +697,134 @@ function groupBy(items, getKey) {
   }, new Map());
 }
 
-function createFinding({ severity, category, title, description, evidence = [], recommendation }) {
+function createFinding({
+  severity,
+  category,
+  title,
+  description,
+  evidence = [],
+  evidenceAnchors = [],
+  fallbackAnchor,
+  recommendation
+}) {
+  const anchors = evidenceAnchors.filter(Boolean);
+  if (anchors.length === 0 && fallbackAnchor) {
+    anchors.push(fallbackAnchor);
+  }
+
   return {
     id: buildId('finding', severity, category, title, evidence.join('|')),
+    ruleId: category,
     severity,
     category,
     title,
     description,
     evidence: evidence.slice(0, MAX_SAMPLE_ITEMS),
+    evidenceAnchors: anchors.slice(0, MAX_SAMPLE_ITEMS),
     recommendation
   };
 }
 
 function analyzeRules(project, content) {
   const findings = [];
+  const addFinding = (input) => {
+    findings.push(createFinding({ ...input, fallbackAnchor: project.sourceAnchor }));
+  };
   const duplicateAddressGroups = [...groupBy(project.variables.filter((item) => item.address), (item) => item.address).entries()]
     .filter(([, items]) => items.length > 1);
 
   for (const [address, variables] of duplicateAddressGroups) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: addressDirection(address) === 'output' ? 'high' : 'medium',
         category: 'duplicate-address',
         title: `중복 주소 후보: ${address}`,
         description: `${address} 주소가 ${variables.length}개 변수에 연결되어 있습니다.`,
         evidence: variables.map((item) => item.name),
+        evidenceAnchors: variables.map((item) => item.sourceAnchor),
         recommendation: '동일 디바이스/주소가 의도된 alias인지, 실수로 중복 선언된 것인지 PLC 엔지니어가 확인해야 합니다.'
-      })
-    );
+      });
   }
 
   const uncommentedBlocks = project.blocks.filter((block) => !block.comment && !block.protected);
   if (uncommentedBlocks.length > 0) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: 'low',
         category: 'missing-comments',
         title: `주석 없는 블록 후보 ${uncommentedBlocks.length}개`,
         description: '블록 설명이 비어 있어 인수인계와 변경 검토 비용이 커질 수 있습니다.',
         evidence: uncommentedBlocks.map((block) => `${block.type} ${block.name}`),
+        evidenceAnchors: uncommentedBlocks.map((block) => block.sourceAnchor),
         recommendation: '핵심 OB/FB/FC부터 역할, 설비 범위, 주요 인터락을 주석으로 보강하세요.'
-      })
-    );
+      });
   }
 
   const uncommentedVariables = project.variables.filter((variable) => !variable.comment);
   if (uncommentedVariables.length > 0) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: 'low',
         category: 'missing-comments',
         title: `주석 없는 태그/변수 후보 ${uncommentedVariables.length}개`,
         description: '주소나 역할 설명이 없는 태그는 유지보수 중 오해를 만들 수 있습니다.',
         evidence: uncommentedVariables.map((variable) => variable.address ? `${variable.name} (${variable.address})` : variable.name),
+        evidenceAnchors: uncommentedVariables.map((variable) => variable.sourceAnchor),
         recommendation: 'I/O, 안전 인터락, 설비 동작 조건과 연결된 태그부터 코멘트를 채우세요.'
-      })
-    );
+      });
   }
 
   const unusedVariables = project.variables.filter((variable) => variable.usageCount <= 1 && variable.name.length > 2);
   if (unusedVariables.length > 0) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: 'medium',
         category: 'unused-tags',
         title: `미사용 태그 후보 ${unusedVariables.length}개`,
         description: '정적 텍스트 기준으로 선언 외 사용 흔적이 약한 태그입니다.',
         evidence: unusedVariables.map((variable) => variable.name),
+        evidenceAnchors: unusedVariables.map((variable) => variable.sourceAnchor),
         recommendation: 'HMI, 외부 참조, 간접 주소 사용 가능성을 확인한 뒤 정리 여부를 판단하세요.'
-      })
-    );
+      });
   }
 
   const namingViolations = project.variables
     .concat(project.blocks)
     .filter((item) => !/^[A-Za-z][A-Za-z0-9_]*$/.test(item.name));
   if (namingViolations.length > 0) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: 'low',
         category: 'naming',
         title: `네이밍 규칙 위반 후보 ${namingViolations.length}개`,
         description: '공백, 특수문자, 숫자 시작 이름은 자동 문서화와 검색 품질을 낮출 수 있습니다.',
         evidence: namingViolations.map((item) => item.name),
+        evidenceAnchors: namingViolations.map((item) => item.sourceAnchor),
         recommendation: '팀 표준에 맞는 영문자 시작, 숫자/밑줄 조합의 안정적인 이름을 권장합니다.'
-      })
-    );
+      });
   }
 
   const setResetTargets = [...content.matchAll(SET_RESET_PATTERN)].map((match) => normalizeAddress(match[1]));
   const repeatedSetResetTargets = [...groupBy(setResetTargets, (target) => target).entries()].filter(([, targets]) => targets.length > 1);
   for (const [target, targets] of repeatedSetResetTargets) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: 'high',
         category: 'set-reset',
         title: `Set/Reset 다중 발생 후보: ${target}`,
         description: `${target} 대상 Set/Reset 명령이 ${targets.length}회 감지되었습니다.`,
         evidence: [target],
+        evidenceAnchors: project.deviceReferences
+          .filter((reference) => reference.canonicalAddress === target && ['set', 'reset'].includes(reference.access))
+          .map((reference) => reference.source),
         recommendation: '스캔 사이클, 우선순위, 인터락 조건을 실제 설비 기준으로 검토하세요.'
-      })
-    );
+      });
   }
 
   if (project.protectedItems.length > 0) {
-    findings.push(
-      createFinding({
+    addFinding({
         severity: 'medium',
         category: 'protected-content',
         title: `보호/암호화 항목 ${project.protectedItems.length}개 제외`,
         description: '보호된 블록이나 암호화된 항목은 우회하지 않고 분석 범위에서 제외했습니다.',
         evidence: project.protectedItems.map((item) => item.name),
+        evidenceAnchors: project.protectedItems.map((item) => item.sourceAnchor),
         recommendation: '벤더 툴과 정식 권한으로만 내용을 확인하고, 본 도구에서는 “보호됨” 상태로 관리하세요.'
-      })
-    );
+      });
   }
 
   return findings;
@@ -783,7 +872,83 @@ function generateAssistantSummary(project, findings) {
   ].join('\n');
 }
 
-export function analyzePlcProject({ filename, vendor = 'auto', content }) {
+function createCanonicalSnapshot({ project, content, cpuProfile, requestedCpuProfileId }) {
+  const devicesById = new Map(project.canonicalDevices.map((device) => [device.id, device]));
+  const parseWarnings = project.source.parserWarnings.map((message) => ({
+    code: 'LEGACY_PARSER_WARNING',
+    message
+  }));
+
+  for (const ioAddress of project.ioAddresses) {
+    const device = parseDeviceAddress(ioAddress.address, cpuProfile);
+    devicesById.set(device.id, device);
+    ioAddress.device = device;
+
+    if (device.valid === false) {
+      parseWarnings.push({
+        code: 'INVALID_DEVICE_ADDRESS',
+        message: `${device.canonicalAddress} is invalid for ${cpuProfile?.id || 'the selected profile'}.`,
+        source: ioAddress.sourceAnchor || project.sourceAnchor
+      });
+    }
+  }
+
+  if (project.vendor === 'mitsubishi' && !cpuProfile) {
+    parseWarnings.push({
+      code: requestedCpuProfileId ? 'CPU_PROFILE_UNKNOWN' : 'CPU_PROFILE_REQUIRED',
+      message: requestedCpuProfileId
+        ? `CPU profile "${requestedCpuProfileId}" is not available; address and timer facts remain unknown.`
+        : 'Select an exact Mitsubishi CPU profile before relying on address or timer calculations.',
+      source: project.sourceAnchor
+    });
+  }
+
+  for (const instruction of project.unknownInstructions) {
+    parseWarnings.push({
+      code: 'UNKNOWN_INSTRUCTION',
+      message: `Instruction ${instruction.opcode} is preserved but its semantics are not interpreted.`,
+      source: instruction.source
+    });
+  }
+
+  const programs =
+    project.programs.length > 0
+      ? project.programs
+      : project.blocks.map((block) => ({
+          id: block.id,
+          name: block.name,
+          kind: block.type === 'PROGRAM' ? 'program' : 'unknown',
+          language: block.language === 'ST' || block.language === 'SCL' ? 'structured-text' : 'unknown',
+          networks: [],
+          source: [block.sourceAnchor || project.sourceAnchor]
+        }));
+  const contentHash = hashContent(content);
+
+  return {
+    id: buildId('snapshot', project.id, contentHash, cpuProfile?.id || 'unknown-profile'),
+    workspaceId: null,
+    contentHash,
+    vendor: project.vendor,
+    cpuProfileId: cpuProfile?.id || null,
+    artifacts: [project.artifact],
+    programs,
+    devices: [...devicesById.values()],
+    references: project.deviceReferences,
+    callEdges: project.callGraph,
+    dataFlowEdges: project.deviceReferences.map((reference) => ({
+      id: buildId('data-flow', reference.id),
+      deviceId: reference.deviceId,
+      instructionId: reference.instructionId,
+      access: reference.access,
+      source: reference.source,
+      evidence: reference.evidence
+    })),
+    parseWarnings,
+    createdAt: new Date().toISOString()
+  };
+}
+
+export function analyzePlcProject({ filename, vendor = 'auto', content, cpuProfileId = null }) {
   const safeContent = safeString(content, '', 5_000_000);
   if (!safeContent) {
     throw new Error('업로드 파일 내용이 비어 있습니다.');
@@ -791,6 +956,7 @@ export function analyzePlcProject({ filename, vendor = 'auto', content }) {
 
   const fileType = detectFileType(filename, safeContent);
   const normalizedVendor = normalizeVendor(vendor, fileType, safeContent);
+  const cpuProfile = normalizedVendor === 'mitsubishi' ? getCpuProfile(cpuProfileId) : null;
   let project;
 
   if (fileType === 'siemens-tia-xml' || fileType === 'plcopen-xml') {
@@ -798,17 +964,38 @@ export function analyzePlcProject({ filename, vendor = 'auto', content }) {
   } else if (fileType === 'mitsubishi-csv') {
     project = parseMitsubishiCsv({ filename, vendor: normalizedVendor, fileType, content: safeContent });
   } else if (fileType === 'mitsubishi-text') {
-    project = parseMitsubishiText({ filename, vendor: normalizedVendor, fileType, content: safeContent });
+    project = parseMitsubishiText({
+      filename,
+      vendor: normalizedVendor,
+      fileType,
+      content: safeContent,
+      cpuProfile
+    });
   } else {
     project = parseUnsupported({ filename, vendor: normalizedVendor, fileType, content: safeContent });
   }
 
+  project.cpuProfileId = cpuProfile?.id || null;
+  const snapshot = createCanonicalSnapshot({
+    project,
+    content: safeContent,
+    cpuProfile,
+    requestedCpuProfileId: cpuProfileId
+  });
   const findings = analyzeRules(project, safeContent);
   const summary = {
     blockCount: project.blocks.length,
     variableCount: project.variables.length,
     ioAddressCount: project.ioAddresses.length,
     callEdgeCount: project.callGraph.length,
+    programCount: snapshot.programs.length,
+    networkCount: snapshot.programs.reduce((count, program) => count + program.networks.length, 0),
+    instructionCount: snapshot.programs.reduce(
+      (count, program) =>
+        count + program.networks.reduce((networkCount, network) => networkCount + network.instructions.length, 0),
+      0
+    ),
+    deviceCount: snapshot.devices.length,
     protectedItemCount: project.protectedItems.length,
     severityCounts: severityCounts(findings),
     languageDistribution: languageDistribution(project.blocks)
@@ -817,6 +1004,7 @@ export function analyzePlcProject({ filename, vendor = 'auto', content }) {
   return {
     id: buildId('analysis', project.id, String(summary.variableCount), String(findings.length)),
     project,
+    snapshot,
     summary,
     findings,
     assistantSummary: generateAssistantSummary(project, findings),

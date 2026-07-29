@@ -107,14 +107,42 @@
             </div>
 
             <label class="file-drop" for="project-file">
-              <input id="project-file" name="project-file" type="file" accept=".xml,.csv,.txt,.lst,.asc" />
+              <input
+                id="project-file"
+                name="project-file"
+                type="file"
+                accept=".xml,.csv,.txt,.lst,.asc"
+                multiple
+              />
               <span class="file-plus" aria-hidden="true">+</span>
               <span>
                 <strong id="file-name">PLC export 파일 선택</strong>
-                <small id="file-meta">GX Works2 CSV/TXT/LST 또는 TIA Portal XML</small>
+                <small id="file-meta">GX Works2는 CSV/TXT/LST/ASC 여러 개, Siemens는 XML 1개</small>
               </span>
             </label>
-            <button id="clear-file" class="text-button hidden" type="button">선택한 파일 빼기</button>
+            <ul id="file-list" class="selected-file-list hidden" aria-label="선택한 파일"></ul>
+            <div id="mitsubishi-import-options" class="import-options">
+              <label>
+                CPU 계열
+                <select id="cpu-profile" name="cpu-profile">
+                  <option value="">모름 · 보수적으로 분석</option>
+                  <option value="mitsubishi-fx3">MELSEC FX3 계열</option>
+                  <option value="mitsubishi-q">MELSEC QCPU 계열</option>
+                  <option value="mitsubishi-l">MELSEC LCPU 계열</option>
+                </select>
+              </label>
+              <label>
+                파일 문자 인코딩
+                <select id="file-encoding" name="file-encoding">
+                  <option value="utf-8">UTF-8</option>
+                  <option value="cp949">한국어 CP949</option>
+                  <option value="shift-jis">일본어 Shift-JIS / CP932</option>
+                  <option value="windows-1252">Windows-1252</option>
+                </select>
+              </label>
+              <small>CPU가 불명확하면 주소 진법과 타이머 시간값을 추정하지 않습니다.</small>
+            </div>
+            <button id="clear-file" class="text-button hidden" type="button">선택한 파일 모두 빼기</button>
             <div id="mode-hint" class="mode-hint" role="status"></div>
           </section>
 
@@ -167,6 +195,9 @@
             <section class="assistant-summary" aria-labelledby="assistant-title">
               <h3 id="assistant-title">분석 설명</h3>
               <pre id="assistant-summary"></pre>
+            </section>
+            <section id="import-review" class="import-review" aria-labelledby="import-review-title">
+              <h3 id="import-review-title">가져오기 검토</h3>
             </section>
           </details>
 

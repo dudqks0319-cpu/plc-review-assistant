@@ -68,6 +68,9 @@ test('GET /api/health exposes read-only product scope', async () => {
   assert.equal(body.data.codexRequirementNormalizer, 'deterministic-fallback');
   assert.equal(body.data.writesToPlc, false);
   assert.equal(body.data.bypassesProtectedBlocks, false);
+  assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
+  assert.match(response.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
+  assert.equal(response.headers.get('Permissions-Policy'), 'camera=(), microphone=(), geolocation=()');
 });
 
 test('POST /api/v1/analyses returns normalized PLC analysis', async () => {
@@ -85,6 +88,137 @@ test('POST /api/v1/analyses returns normalized PLC analysis', async () => {
   assert.equal(body.data.summary.blockCount, 2);
   assert.equal(body.data.summary.ioAddressCount >= 2, true);
   assert.match(body.data.assistantSummary, /Siemens/);
+});
+
+test('POST /api/v1/analyses accepts an explicit Mitsubishi CPU profile and returns anchored IR', async () => {
+  const { response, body } = await requestJson('/api/v1/analyses', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: 'main.lst',
+      vendor: 'mitsubishi',
+      cpuProfileId: 'mitsubishi-fx3',
+      content: ['PROGRAM MAIN', 'NETWORK 1', 'LD X7', 'OUT Y10', 'END'].join('\n')
+    })
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(body.data.snapshot.cpuProfileId, 'mitsubishi-fx3');
+  assert.equal(body.data.snapshot.programs[0].name, 'MAIN');
+  assert.equal(body.data.snapshot.devices.some((device) => device.canonicalAddress === 'X7' && device.radix === 8), true);
+  assert.equal(
+    body.data.snapshot.references.every((reference) => /^[a-f0-9]{64}$/.test(reference.source.rawSnippetHash)),
+    true
+  );
+});
+
+test('API v2 creates an in-memory workspace, imports a bundle, and exposes device data flow', async () => {
+  const workspaceResponse = await requestJson('/api/v2/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'FX3 conveyor review',
+      vendor: 'mitsubishi',
+      cpuProfileId: 'mitsubishi-fx3'
+    })
+  });
+  assert.equal(workspaceResponse.response.status, 201);
+  assert.match(workspaceResponse.body.requestId, /^req-/);
+  const workspaceId = workspaceResponse.body.data.id;
+
+  const importResponse = await requestJson(`/api/v2/workspaces/${workspaceId}/artifacts`, {
+    method: 'POST',
+    body: JSON.stringify({
+      artifacts: [
+        {
+          filename: 'labels.csv',
+          content: 'Label,Device,Comment,Program\nStart,X0,Start command,MAIN\nRun,Y20,Run output,MAIN'
+        },
+        {
+          filename: 'main.lst',
+          content: 'PROGRAM MAIN\nNETWORK 1\nLD X0\nOUT Y20\nEND'
+        }
+      ]
+    })
+  });
+  assert.equal(importResponse.response.status, 201);
+  assert.equal(importResponse.body.data.snapshot.artifacts.length, 2);
+  const snapshotId = importResponse.body.data.snapshot.id;
+
+  const repeatedImport = await requestJson(`/api/v2/workspaces/${workspaceId}/artifacts`, {
+    method: 'POST',
+    body: JSON.stringify({
+      artifacts: [
+        {
+          filename: 'labels.csv',
+          content: 'Label,Device,Comment,Program\nStart,X0,Start command,MAIN\nRun,Y20,Run output,MAIN'
+        },
+        {
+          filename: 'main.lst',
+          content: 'PROGRAM MAIN\nNETWORK 1\nLD X0\nOUT Y20\nEND'
+        }
+      ]
+    })
+  });
+  assert.equal(repeatedImport.response.status, 201);
+  assert.equal(repeatedImport.body.data.reused, true);
+
+  const deviceResponse = await requestJson(
+    `/api/v2/snapshots/${snapshotId}/devices/Y20?maxTraceDepth=4`
+  );
+  assert.equal(deviceResponse.response.status, 200);
+  assert.equal(deviceResponse.body.data.device.canonicalAddress, 'Y20');
+  assert.equal(deviceResponse.body.data.writers.length, 1);
+  assert.equal(
+    deviceResponse.body.data.backwardTrace.devices.some(
+      (device) => device.canonicalAddress === 'X0'
+    ),
+    true
+  );
+
+  const dataFlowResponse = await requestJson(`/api/v2/snapshots/${snapshotId}/data-flow`);
+  assert.equal(dataFlowResponse.response.status, 200);
+  assert.equal(
+    dataFlowResponse.body.data.edges.some(
+      (edge) => edge.fromAddress === 'X0' && edge.toAddress === 'Y20'
+    ),
+    true
+  );
+});
+
+test('API mutations reject cross-site and non-JSON requests', async () => {
+  const crossSite = await fetch(`${baseUrl}/api/v2/workspaces`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'https://attacker.example',
+      'Sec-Fetch-Site': 'cross-site'
+    },
+    body: JSON.stringify({ name: 'blocked' })
+  });
+  assert.equal(crossSite.status, 403);
+  const crossSiteBody = await crossSite.json();
+  assert.equal(crossSiteBody.error.code, 'CROSS_SITE_REQUEST_BLOCKED');
+
+  const wrongContentType = await fetch(`${baseUrl}/api/v2/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ name: 'blocked' })
+  });
+  assert.equal(wrongContentType.status, 415);
+  const wrongContentTypeBody = await wrongContentType.json();
+  assert.equal(wrongContentTypeBody.error.code, 'CONTENT_TYPE_UNSUPPORTED');
+});
+
+test('API rejects oversized JSON before parsing or analysis work begins', async () => {
+  const response = await fetch(`${baseUrl}/api/v2/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'x'.repeat(6_000_100) })
+  });
+
+  assert.equal(response.status, 413);
+  const body = await response.json();
+  assert.equal(body.error.code, 'PAYLOAD_TOO_LARGE');
+  assert.equal(body.error.retryable, false);
 });
 
 test('POST /api/v1/reports returns markdown, excel, and pdf downloads', async () => {
@@ -172,7 +306,7 @@ test('POST /api/v1/codex/change-requirements falls back when Codex normalizer is
   assert.equal(body.data.validation.ok, true);
 });
 
-test('POST /api/v1/change-plans creates an honest file-less Mitsubishi draft', async () => {
+test('POST /api/v1/change-plans requires a verified timer profile before a Mitsubishi timed draft', async () => {
   const { response, body } = await requestJson('/api/v1/change-plans', {
     method: 'POST',
     body: JSON.stringify({
@@ -184,21 +318,33 @@ test('POST /api/v1/change-plans creates an honest file-less Mitsubishi draft', a
   assert.equal(response.status, 201);
   assert.equal(body.data.version, 'mitsubishi-change-assistant');
   assert.equal(body.data.normalizedRequirement.delaySeconds, 3);
-  assert.equal(body.data.recommendedPatch.status, 'candidate');
-  assert.equal(body.data.simulation.result, 'pass');
-  assert.equal(body.data.executionScope, 'engineering-candidate');
+  assert.equal(body.data.timerValidation.status, 'unknown');
+  assert.equal(body.data.timerValidation.reason, 'CPU_PROFILE_REQUIRED');
+  assert.equal(body.data.recommendedPatch.status, 'needs-verification');
+  assert.equal(body.data.recommendedPatch.patchArtifacts.length, 0);
+  assert.equal(body.data.simulation.result, 'not-run');
+  assert.deepEqual(body.data.simulation.timeline, []);
+  assert.deepEqual(body.data.testCases, []);
+  assert.equal(body.data.executionScope, 'review-only');
   assert.equal(body.data.readiness.mode, 'new-circuit-draft');
+  assert.equal(body.data.readiness.level, 'needs-profile');
   assert.equal(body.data.readiness.canWriteToPlc, false);
   assert.equal(
-    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.gxworks2.lst'),
-    true
+    body.data.candidateFiles.some(
+      (file) => file.filename === 'mitsubishi-natural-language-draft.instruction-draft.txt'
+    ),
+    false
   );
   assert.equal(
-    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.change-plan.json'),
+    body.data.candidateFiles.some((file) => file.filename === 'mitsubishi-natural-language-draft.logic-draft.json'),
     true
   );
   assert.equal(body.data.candidateFiles.some((file) => file.filename.endsWith('.candidate.lst')), false);
   assert.equal(body.data.candidateFiles.some((file) => file.filename.endsWith('.candidate.diff')), false);
+  assert.equal(
+    body.data.candidateFiles.some((file) => /OUT\s+T\d+\s+K\d+/i.test(file.content)),
+    false
+  );
 });
 
 test('POST /api/v1/change-plans returns simulation-only files for elevator drafts', async () => {
