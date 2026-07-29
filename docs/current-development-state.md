@@ -2,7 +2,7 @@
 
 기준일: 2026-07-29  
 브랜치: `agent/plc-foundation`  
-Phase 5~6 완료 커밋: `c44e79e`
+Phase 7 완료 커밋: `b5d5eb7`
 
 이 문서는 상세 개발계획서의 단계와 현재 코드 증거를 연결하는 상태
 원장이다. 로컬 테스트 통과는 실제 GX Works2 Import, 현장 PLC 연결,
@@ -12,7 +12,7 @@ Pilot 승인 또는 Production 출시를 의미하지 않는다.
 
 | 단계 | 상태 | 현재 증거 | 남은 게이트 |
 | --- | --- | --- | --- |
-| Phase 0 브랜치 안정화 | 로컬 완료 | 전체 Node 테스트 64/64, `git diff --check` 통과 | 원격 CI는 별도 |
+| Phase 0 브랜치 안정화 | 로컬 완료 | 전체 Node 테스트 71/71, `git diff --check` 통과 | 원격 CI는 별도 |
 | Phase 1 Domain IR·SourceAnchor | 로컬 완료 | canonical snapshot, instruction/reference SourceAnchor, SHA-256 | 실제 익명화 프로젝트 교차 검증 |
 | Phase 2 CPU Profile·주소 파서 | 로컬 완료 | FX3/QCPU/LCPU profile, FX3 X/Y 8진 주소 테스트, Unknown timer 정책 | 더 많은 CPU 모델 공식표 |
 | Phase 3 Project Bundle·명령 파서 | 로컬 완료 | CSV/TXT/LST/ASC 다중 Import, 인코딩, immutable snapshot, unknown opcode 보존 | Golden Fixture 확대 |
@@ -20,7 +20,7 @@ Pilot 승인 또는 Production 출시를 의미하지 않는다.
 | Phase 5 근거형 질문 | 로컬 완료 | 10개 질문 유형, deterministic Query Planner, confidence/unknown, 원문 줄 이동 | Pilot 질문 정확도 측정 |
 | Phase 6 RAG | 로컬 완료 | TXT/MD 메모리 색인, vendor/CPU 격리, 문서 citation, injection 문단 제외 | 벤더 공식 문서 권리 검토 |
 | Phase 7 변경 후보 v2 | 로컬 완료 | 저위험 8종 GX Works2 Renderer, Logic IR, R1~R4, Writer·주소 충돌, Template별 test/report | 실제 GX Works2 프로그램 체크·Pilot |
-| Phase 8 검증 루프 | 일부 존재 | 제한된 timer/stop-priority harness | 반복 수정, Validation Matrix, Trend, 외부 adapter |
+| Phase 8 검증 루프 | 로컬 완료 | V0~V10 Matrix, 8종 Template simulator, Trend, 안전한 END 보정, 수동 검증 기록 adapter | 실제 GX Works2 프로그램 체크·엔지니어 승인·현장 검증 |
 | Phase 9 UI 전면 개선 | 일부 존재 | 근거 질문 UI, 키보드 focus, 44px 터치, 390px 가로 넘침 없음 | React/TypeScript, Project Tree, Network/Device/Data Flow 화면 |
 | Phase 10 패키징·Pilot | 일부 존재 | loopback 서버, Windows launcher | 재시작 복원, 삭제/로그 정책, macOS package, Pilot |
 
@@ -59,13 +59,12 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 
 ## 다음 작업
 
-1. Phase 8 Validation Matrix와 생성→검증→수정 반복을 구현한다.
-2. Template별 `not-run` 시나리오를 간이 Simulator의 실제
-   `pass/fail/warning` 결과와 Trend로 연결한다.
-3. 기존 Writer 1개는 정확한 SourceAnchor 위치 수정 후보로 연결하고,
-   Writer 2개 이상은 계속 명령 후보를 보류한다.
-4. 외부 ST Tool과 GX Works2 수동 프로그램 체크 결과를 기록할
-   Adapter 계약을 구현한다.
+1. Phase 9에서 기존 화면을 React/TypeScript 컴포넌트 경계로 전환한다.
+2. Project Tree, Network Viewer, Device Detail, Data Flow Graph를 현재
+   immutable snapshot API에 연결한다.
+3. Grounded Chat과 Change Review를 하나의 프로젝트 검토 흐름으로
+   통합한다.
+4. 키보드 접근·390px 모바일 보고서·첫 분석 E2E를 자동화한다.
 
 ## Phase 7 현재 증거
 
@@ -104,3 +103,40 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 | 실제 GX Works2 Import·프로그램 체크 미검증 | PLC 담당자 | Pilot 시작 전 |
 | R3/R4 분류의 현장 위험성 평가 미검증 | 안전 담당자 | Pilot 시작 전 |
 | 실제 익명화 프로젝트의 Writer·주소 충돌 정확도 미측정 | PLC 담당자 | Pilot 시작 전 |
+
+## Phase 8 현재 증거
+
+- 모든 생성 후보는 V0 스키마부터 V6 간이 시뮬레이션까지 로컬에서
+  순서대로 검증한다.
+- V7 외부 ST 검증은 Mitsubishi IL의 최종 검증으로 오인하지 않도록
+  `해당 없음`으로 표시한다.
+- V8 GX Works2 프로그램 체크, V9 엔지니어 승인, V10 현장 검증은
+  기록이 없으면 반드시 `미실행`으로 유지한다.
+- 8개 저위험 Template 각각을 입력 변화와 불변식으로 실행하는
+  deterministic simulator가 `pass/fail/warning`과 Trend를 만든다.
+- 검증 실패 시 최대 3회까지만 반복하며, 의미를 바꾸지 않는 누락
+  `END` 추가만 자동 보정한다. 지원하지 않는 명령이나 안전 위험은
+  자동 보정하지 않고 실패로 남긴다.
+- 외부 ST와 GX Works2 adapter는 결과 기록만 받으며 프로세스를
+  실행하거나 PLC에 쓰지 않는다.
+- Validation Matrix와 Trend를 JSON 파일 및 검토 보고서로 제공한다.
+- 모바일 390×844 실제 화면에서 가로 넘침이 없고, 유효 클릭 영역은
+  44px 이상이며, 넓은 Trend 표는 카드 안에서만 가로 스크롤된다.
+- 전체 Node 테스트 71/71 통과.
+
+## Phase 8 보안 게이트
+
+- 동적 코드 실행·외부 프로세스 실행·외부 네트워크 호출 추가 없음
+- adapter와 검증 결과 모두 `canWriteToPlc: false`
+- 수동 검증 기록은 단계·상태·진단 수·증거 수를 제한하고 잘못된
+  요청은 400으로 거부
+- 인증되지 않은 외부 결과를 자동 `통과`로 승격하지 않음
+- V8~V10 기록 부재와 검증기 불확실성은 fail-closed `미실행`
+- 의존성 추가 없음
+
+| 잔여 위험 | 담당 | 완료 기한 |
+| --- | --- | --- |
+| 실제 GX Works2 프로그램 체크 미실행 | PLC 담당자 | Pilot 시작 전 |
+| 외부 ST 연동은 자동 실행이 아닌 수동 기록 adapter만 구현 | 개발 담당자 | Phase 10 Pilot 전 |
+| 실제 익명화 프로젝트에서 8종 시뮬레이터 정확도 미측정 | PLC 담당자 | Pilot 시작 전 |
+| V9 엔지니어 승인·V10 현장 검증 미실행 | 안전·PLC 담당자 | Production 전 |

@@ -11,6 +11,7 @@ import {
   buildChangeCandidateV2,
   createTemplateTestScenarios
 } from '../application/changeCandidateV2.js';
+import { runValidationLoop } from '../application/validationLoop.js';
 
 const HIGH_RISK_MACHINE_PROFILES = [
   {
@@ -375,6 +376,7 @@ function createPlanJson(plan) {
       timerValidation: plan.timerValidation,
       circuitDraft: plan.circuitDraft,
       changeCandidateV2: plan.changeCandidateV2,
+      validationLoop: plan.validationLoop,
       warnings: plan.warnings
     },
     null,
@@ -390,7 +392,10 @@ function createTestScenarioJson(plan) {
       template: plan.changeCandidateV2?.template || null,
       testCases: plan.testCases || [],
       invariants: plan.changeCandidateV2?.logicIr?.invariants || [],
-      simulation: plan.simulation
+      simulation: plan.simulation,
+      validationSummary: plan.validationLoop?.summary || null,
+      validationRuns: plan.validationLoop?.validationRuns || [],
+      trend: plan.validationLoop?.trend || null
     },
     null,
     2
@@ -400,6 +405,14 @@ function createTestScenarioJson(plan) {
 function createReviewReport(plan) {
   const conflicts = plan.changeCandidateV2?.impactAnalysis?.conflicts || [];
   const reasons = plan.changeCandidateV2?.validation?.reviewReasons || [];
+  const validationRuns = plan.validationLoop?.validationRuns || [];
+  const failedDiagnostics = validationRuns
+    .filter((run) => run.status === 'fail')
+    .flatMap((run) =>
+      (run.diagnostics || []).map(
+        (item) => `${run.level} ${item.code}: ${item.message}`
+      )
+    );
   return [
     '# PLC 변경 후보 검토 보고서',
     '',
@@ -422,6 +435,18 @@ function createReviewReport(plan) {
     '',
     '## 추가 확인',
     ...(reasons.length ? reasons.map((reason) => `- ${reason}`) : ['- 없음']),
+    '',
+    '## Validation Matrix',
+    ...(validationRuns.length
+      ? validationRuns.map(
+          (run) => `- ${run.level}: ${run.status} · ${run.tool}`
+        )
+      : ['- 미실행']),
+    '',
+    '## 검증 실패 이유',
+    ...(failedDiagnostics.length
+      ? failedDiagnostics.map((item) => `- ${item}`)
+      : ['- 없음']),
     '',
     '## 승인',
     ...(plan.approvalsRequired || []).map((approval) => `- ${approval}`),
@@ -527,8 +552,63 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
     mimeType: 'text/markdown; charset=utf-8',
     content: createReviewReport(plan)
   });
+  if (plan.validationLoop) {
+    files.push({
+      id: makeId('file', baseName, vendor, 'validation-matrix'),
+      filename: `${baseName}.validation-matrix.json`,
+      label: 'Validation Matrix',
+      mimeType: 'application/json; charset=utf-8',
+      content: JSON.stringify(
+        {
+          version: plan.validationLoop.version,
+          summary: plan.validationLoop.summary,
+          iterations: plan.validationLoop.iterations,
+          repairs: plan.validationLoop.repairs,
+          validationRuns: plan.validationLoop.validationRuns,
+          policy: plan.validationLoop.policy
+        },
+        null,
+        2
+      )
+    });
+    files.push({
+      id: makeId('file', baseName, vendor, 'trend'),
+      filename: `${baseName}.trend.json`,
+      label: '시뮬레이션 Trend',
+      mimeType: 'application/json; charset=utf-8',
+      content: JSON.stringify(plan.validationLoop.trend, null, 2)
+    });
+  }
 
   return files;
+}
+
+function synchronizeRepairedPatchArtifacts(plan) {
+  if (
+    plan.vendor !== 'mitsubishi' ||
+    !Array.isArray(plan.circuitDraft?.instructionList) ||
+    !(plan.validationLoop?.repairs || []).length
+  ) {
+    return;
+  }
+  const instructionList = plan.circuitDraft.instructionList.join('\n');
+  const csv = plan.circuitDraft.instructionList
+    .map((line, index) => `${index + 1},"${line.replaceAll('"', '""')}"`)
+    .join('\n');
+  plan.recommendedPatch = {
+    ...plan.recommendedPatch,
+    patchArtifacts: (plan.recommendedPatch?.patchArtifacts || []).map(
+      (artifact) => {
+        if (artifact.language === 'GX Works2 IL') {
+          return { ...artifact, content: instructionList };
+        }
+        if (artifact.language === 'CSV') {
+          return { ...artifact, content: csv };
+        }
+        return artifact;
+      }
+    )
+  };
 }
 
 function highRiskManualSteps(profile) {
@@ -741,6 +821,40 @@ export function createChangePlan(options) {
           : check
       )
     };
+  }
+
+  if (plan.vendor === 'mitsubishi') {
+    const validationLoop = runValidationLoop({
+      changeCandidate: changeCandidateV2,
+      circuitDraft: plan.circuitDraft,
+      testScenarios: plan.testCases,
+      manualValidationRecords: options?.manualValidationRecords || [],
+      maxIterations: 2
+    });
+    plan.validationLoop = validationLoop;
+    plan.circuitDraft = validationLoop.circuitDraft;
+    plan.testCases =
+      validationLoop.simulation.scenarios.length > 0
+        ? validationLoop.simulation.scenarios
+        : plan.testCases;
+    plan.simulation = {
+      ...plan.simulation,
+      harness: validationLoop.simulation.harness,
+      result:
+        changeCandidateV2.risk.class === 'R4'
+          ? 'blocked'
+          : validationLoop.simulation.result,
+      reason:
+        validationLoop.simulation.diagnostics
+          .map((item) => item.message)
+          .join(' ') || null,
+      timeline:
+        changeCandidateV2.risk.class === 'R4'
+          ? []
+          : validationLoop.trend.rows,
+      validationSummary: validationLoop.summary
+    };
+    synchronizeRepairedPatchArtifacts(plan);
   }
 
   plan.candidateFiles = createCandidateFiles({

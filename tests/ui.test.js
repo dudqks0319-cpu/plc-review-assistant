@@ -60,6 +60,17 @@ test('change review UI shows Phase 7 risk class, template, Logic IR, and conflic
   assert.match(appJs, /canEmitInstructionCandidate/);
 });
 
+test('change review UI separates Phase 8 local, GX Works, approval, and field validation states', () => {
+  assert.match(appJs, /Validation Matrix/);
+  assert.match(appJs, /로컬 V0~V6/);
+  assert.match(appJs, /전체 V0~V10/);
+  assert.match(appJs, /실패·경고 이유/);
+  assert.match(appJs, /시뮬레이션 Trend/);
+  assert.match(appJs, /validationStatusLabel/);
+  assert.match(stylesCss, /\.validation-matrix/);
+  assert.match(stylesCss, /\.trend-table-wrap/);
+});
+
 test('grounded question UI exposes recommended questions, confidence, evidence, and original source navigation', () => {
   const examples = indexHtml.match(/data-question-example=/g) || [];
 

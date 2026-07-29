@@ -428,6 +428,148 @@ function renderCircuitDraft(circuitDraft) {
   return section;
 }
 
+function validationStatusLabel(status) {
+  return {
+    pass: '통과',
+    fail: '실패',
+    warning: '경고',
+    'not-run': '미실행',
+    'not-applicable': '해당 없음'
+  }[status] || '확인 필요';
+}
+
+function renderValidationLoop(validationLoop) {
+  const card = createElement('article', 'result-card validation-card');
+  card.append(createElement('h3', '', 'Validation Matrix'));
+  const summary = validationLoop?.summary || {};
+  const localStatus = summary.localStatus || 'not-run';
+  const overallStatus = summary.overallStatus || 'not-run';
+  card.append(
+    createElement(
+      'p',
+      'card-lead',
+      localStatus === 'pass' && overallStatus === 'not-run'
+        ? '로컬 V0~V6 검증은 통과했습니다. GX Works 프로그램 체크, 엔지니어 승인, 현장 검증은 아직 미실행입니다.'
+        : localStatus === 'fail'
+          ? '로컬 검증에 실패했습니다. 아래 실패 이유를 해결하기 전에는 후보를 사용하지 마세요.'
+          : overallStatus === 'pass'
+            ? '기록된 V0~V10 검증 단계가 모두 통과 또는 해당 없음 상태입니다.'
+            : '검증이 아직 실행되지 않았거나 추가 확인이 필요합니다.'
+    )
+  );
+
+  const summaryGrid = createElement('div', 'summary-grid');
+  [
+    ['로컬 V0~V6', validationStatusLabel(localStatus)],
+    ['전체 V0~V10', validationStatusLabel(overallStatus)],
+    ['최고 통과 단계', summary.highestPassedLevel || '없음'],
+    ['자동 보정', `${validationLoop?.repairs?.length || 0}건`]
+  ].forEach(([label, value]) => {
+    const item = createElement('div');
+    item.append(createElement('span', '', label));
+    item.append(createElement('strong', '', value));
+    summaryGrid.append(item);
+  });
+  card.append(summaryGrid);
+
+  const matrix = createElement('div', 'validation-matrix');
+  (validationLoop?.validationRuns || []).forEach((run) => {
+    const row = createElement(
+      'div',
+      `validation-run validation-${run.status || 'not-run'}`
+    );
+    const copy = createElement('div', 'validation-run-copy');
+    copy.append(createElement('span', '', run.tool || '검증 도구'));
+    copy.append(
+      createElement(
+        'small',
+        '',
+        (run.diagnostics || []).map((item) => item.message).join(' ') ||
+          '진단 없음'
+      )
+    );
+    row.append(
+      createElement('strong', 'validation-level', run.level),
+      copy,
+      createElement(
+        'span',
+        'validation-status',
+        validationStatusLabel(run.status)
+      )
+    );
+    matrix.append(row);
+  });
+  card.append(matrix);
+
+  const failedDiagnostics = (validationLoop?.validationRuns || [])
+    .filter((run) => ['fail', 'warning'].includes(run.status))
+    .flatMap((run) =>
+      (run.diagnostics || []).map(
+        (item) => `${run.level} · ${item.code} · ${item.message}`
+      )
+    );
+  if (failedDiagnostics.length) {
+    const warning = createElement('div', 'warning-box');
+    warning.append(createElement('h4', '', '실패·경고 이유'));
+    appendList(warning, failedDiagnostics, 'warning-list');
+    card.append(warning);
+  }
+
+  const trend = validationLoop?.trend;
+  if (trend?.rows?.length) {
+    const details = createElement('details', 'trend-details');
+    details.append(
+      createElement(
+        'summary',
+        '',
+        `시뮬레이션 Trend 보기 · ${trend.rows.length}개 시나리오`
+      )
+    );
+    const wrapper = createElement('div', 'trend-table-wrap');
+    const table = createElement('table', 'trend-table');
+    table.setAttribute('aria-label', '시뮬레이션 Trend');
+    const head = createElement('thead');
+    const headRow = createElement('tr');
+    [
+      '시나리오',
+      '시간/Scan',
+      ...(trend.columns || []).slice(0, 6),
+      '결과'
+    ].forEach((label) => headRow.append(createElement('th', '', label)));
+    head.append(headRow);
+    const body = createElement('tbody');
+    trend.rows.forEach((row) => {
+      const tableRow = createElement('tr');
+      tableRow.append(createElement('td', '', row.scenario || row.scenarioId));
+      tableRow.append(createElement('td', '', String(row.timeSeconds)));
+      (trend.columns || []).slice(0, 6).forEach((column) => {
+        const value = row.signals?.[column];
+        tableRow.append(
+          createElement(
+            'td',
+            '',
+            typeof value === 'boolean'
+              ? value
+                ? '1'
+                : '0'
+              : String(value ?? '-')
+          )
+        );
+      });
+      tableRow.append(
+        createElement('td', '', validationStatusLabel(row.status))
+      );
+      body.append(tableRow);
+    });
+    table.append(head, body);
+    wrapper.append(table);
+    details.append(wrapper);
+    card.append(details);
+  }
+
+  return card;
+}
+
 function downloadGeneratedFile(file) {
   const blob = new Blob([file.content], { type: file.mimeType || 'text/plain; charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -505,8 +647,20 @@ function renderChangePlan(changePlan) {
   const timeline = createElement('ul', 'timeline-list');
   (changePlan.simulation?.timeline || []).forEach((item) => {
     const row = createElement('li');
-    row.append(createElement('span', '', item.name));
-    row.append(createElement('strong', '', item.output ? 'ON' : 'OFF'));
+    row.append(
+      createElement('span', '', item.name || item.scenario || '검증 시나리오')
+    );
+    row.append(
+      createElement(
+        'strong',
+        '',
+        typeof item.output === 'boolean'
+          ? item.output
+            ? 'ON'
+            : 'OFF'
+          : validationStatusLabel(item.status)
+      )
+    );
     timeline.append(row);
   });
   checks.append(timeline);
@@ -561,6 +715,10 @@ function renderChangePlan(changePlan) {
       appendList(impact, reviewReasons);
     }
     panel.append(impact);
+  }
+
+  if (changePlan.validationLoop) {
+    panel.append(renderValidationLoop(changePlan.validationLoop));
   }
 
   if (changePlan.circuitDraft) {

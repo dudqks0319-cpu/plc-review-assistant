@@ -273,7 +273,10 @@ function validateChangePlanPayload(body) {
     vendor,
     requestText,
     sourceContent: typeof body.sourceContent === 'string' ? body.sourceContent : '',
-    sourceFilename: sourceFilename || analysis?.project?.source?.filename || ''
+    sourceFilename: sourceFilename || analysis?.project?.source?.filename || '',
+    manualValidationRecords: Array.isArray(body.manualValidationRecords)
+      ? body.manualValidationRecords.slice(0, 8)
+      : []
   };
 }
 

@@ -360,3 +360,89 @@ export interface ChangeCandidateV2 {
     externalNetworkUsed: false;
   };
 }
+
+export type ValidationLevel =
+  | 'V0'
+  | 'V1'
+  | 'V2'
+  | 'V3'
+  | 'V4'
+  | 'V5'
+  | 'V6'
+  | 'V7'
+  | 'V8'
+  | 'V9'
+  | 'V10';
+
+export type ValidationStatus =
+  | 'pass'
+  | 'fail'
+  | 'warning'
+  | 'not-run'
+  | 'not-applicable';
+
+export interface ValidationDiagnostic {
+  code: string;
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  evidenceIds: string[];
+}
+
+export interface ValidationRun {
+  id: string;
+  level: ValidationLevel;
+  status: ValidationStatus;
+  tool: string;
+  toolVersion?: string;
+  startedAt: string;
+  finishedAt: string;
+  diagnostics: ValidationDiagnostic[];
+  evidenceIds: string[];
+  source?: 'manual-record';
+}
+
+export interface ValidationTrend {
+  status: ValidationStatus;
+  columns: string[];
+  rows: Array<{
+    scenarioId: string;
+    scenario: string;
+    step: number;
+    timeSeconds: number;
+    signals: Record<string, boolean | number | string>;
+    status: ValidationStatus;
+  }>;
+}
+
+export interface ValidationLoopResult {
+  version: 'validation-loop-v1';
+  validationLevels: ValidationLevel[];
+  maxIterations: number;
+  iterations: Array<{
+    iteration: number;
+    status: ValidationStatus;
+    diagnosticCodes: string[];
+    repairActions: string[];
+  }>;
+  repairs: Array<{
+    id: string;
+    code: 'APPEND_END';
+    iteration: number;
+    description: string;
+    safeScope: 'candidate-artifact-only';
+  }>;
+  validationRuns: ValidationRun[];
+  summary: {
+    localStatus: 'pass' | 'fail' | 'warning' | 'not-run';
+    overallStatus: 'pass' | 'fail' | 'not-run';
+    highestPassedLevel: ValidationLevel | null;
+    failedLevels: ValidationLevel[];
+    notRunLevels: ValidationLevel[];
+  };
+  trend: ValidationTrend;
+  policy: {
+    canWriteToPlc: false;
+    executesExternalProcess: false;
+    externalNetworkUsed: false;
+  };
+}

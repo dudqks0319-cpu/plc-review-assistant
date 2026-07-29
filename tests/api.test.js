@@ -482,3 +482,75 @@ test('POST /api/v1/change-plans returns simulation-only files for elevator draft
   );
   assert.equal(body.data.candidateFiles.some((file) => /candidate\.(lst|csv|diff)$/.test(file.filename)), false);
 });
+
+test('POST /api/v1/change-plans keeps local, GX Works, approval, and field validation states separate', async () => {
+  const { response, body } = await requestJson('/api/v1/change-plans', {
+    method: 'POST',
+    body: JSON.stringify({
+      vendor: 'mitsubishi',
+      requestText: '상승 엣지 X0에서 Y0 one-shot 출력을 만들어줘',
+      manualValidationRecords: [
+        {
+          level: 'V8',
+          status: 'pass',
+          tool: 'GX Works2',
+          toolVersion: 'manual-check',
+          diagnostics: [],
+          evidenceIds: ['gx-check-api-001'],
+          startedAt: '2026-07-29T00:00:00.000Z',
+          finishedAt: '2026-07-29T00:01:00.000Z'
+        }
+      ]
+    })
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(body.data.validationLoop.summary.localStatus, 'pass');
+  assert.equal(body.data.validationLoop.summary.overallStatus, 'not-run');
+  assert.equal(
+    body.data.validationLoop.validationRuns.find((run) => run.level === 'V8')
+      .status,
+    'pass'
+  );
+  assert.equal(
+    body.data.validationLoop.validationRuns.find((run) => run.level === 'V9')
+      .status,
+    'not-run'
+  );
+  assert.equal(
+    body.data.validationLoop.validationRuns.find((run) => run.level === 'V10')
+      .status,
+    'not-run'
+  );
+  assert.equal(body.data.testCases.every((testCase) => testCase.status === 'pass'), true);
+  assert.equal(
+    body.data.candidateFiles.some((file) =>
+      file.filename.endsWith('.validation-matrix.json')
+    ),
+    true
+  );
+  assert.equal(
+    body.data.candidateFiles.some((file) => file.filename.endsWith('.trend.json')),
+    true
+  );
+});
+
+test('POST /api/v1/change-plans rejects invalid manual validation records', async () => {
+  const { response, body } = await requestJson('/api/v1/change-plans', {
+    method: 'POST',
+    body: JSON.stringify({
+      vendor: 'mitsubishi',
+      requestText: '상승 엣지 X0에서 Y0 one-shot 출력을 만들어줘',
+      manualValidationRecords: [
+        {
+          level: 'V8',
+          status: 'trusted-without-check',
+          tool: 'GX Works2'
+        }
+      ]
+    })
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, 'invalid_validation_record');
+});

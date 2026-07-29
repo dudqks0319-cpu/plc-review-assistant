@@ -66,7 +66,11 @@ Explicitly out of scope:
   - vendor patch candidate
   - unified diff
   - change-plan JSON
-- Runs a small static timer/stop-priority harness only when the required timer model is known
+- Runs V0-V6 local validation over schema, Logic IR, CPU/device rules, instruction syntax, static safety rules, invariants, and a deterministic eight-template simulator
+- Keeps V7 external ST, V8 GX Works2 program check, V9 engineer approval, and V10 field validation distinct from local validation
+- Records bounded manual GX Works2/approval/field evidence without executing an external process or writing to a PLC
+- Applies only a bounded, semantics-preserving missing `END` repair; unsupported instructions and safety failures remain failed
+- Generates a downloadable Validation Matrix and simulator Trend JSON beside the review report
 - Downloads Markdown, Excel-compatible XML, and PDF reports
 
 ## Run

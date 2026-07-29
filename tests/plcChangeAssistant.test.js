@@ -232,8 +232,16 @@ test('createChangePlan renders all five additional low-risk templates as GX Work
     assert.equal(changePlan.circuitDraft.circuitType, scenario.circuitType, scenario.requestText);
     assert.equal(changePlan.testCases.length >= 3, true, scenario.requestText);
     assert.equal(
-      changePlan.testCases.every((testCase) => testCase.status === 'not-run'),
+      changePlan.testCases.every((testCase) => testCase.status === 'pass'),
       true,
+      scenario.requestText
+    );
+    assert.equal(changePlan.validationLoop.summary.localStatus, 'pass', scenario.requestText);
+    assert.equal(changePlan.validationLoop.summary.overallStatus, 'not-run', scenario.requestText);
+    assert.equal(
+      changePlan.validationLoop.validationRuns.find((run) => run.level === 'V8')
+        .status,
+      'not-run',
       scenario.requestText
     );
     for (const instruction of scenario.instructions) {
