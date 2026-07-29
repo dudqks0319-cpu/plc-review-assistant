@@ -28,20 +28,48 @@ const elements = {
   tabs: [...document.querySelectorAll('.tab')],
   panels: {
     change: document.getElementById('tab-change'),
+    question: document.getElementById('tab-question'),
     findings: document.getElementById('tab-findings'),
     blocks: document.getElementById('tab-blocks'),
     variables: document.getElementById('tab-variables'),
     limits: document.getElementById('tab-limits')
   },
   reportButtons: [...document.querySelectorAll('[data-report]')],
-  exampleButtons: [...document.querySelectorAll('[data-example]')]
+  exampleButtons: [...document.querySelectorAll('[data-example]')],
+  questionForm: document.getElementById('question-form'),
+  questionInput: document.getElementById('question-input'),
+  questionSubmit: document.getElementById('question-submit'),
+  questionAvailability: document.getElementById('question-availability'),
+  includeManualEvidence: document.getElementById('include-manual-evidence'),
+  questionAnswer: document.getElementById('question-answer'),
+  questionExampleButtons: [...document.querySelectorAll('[data-question-example]')],
+  knowledgeForm: document.getElementById('knowledge-form'),
+  knowledgeFile: document.getElementById('knowledge-file'),
+  knowledgeSourceType: document.getElementById('knowledge-source-type'),
+  knowledgeCpuFamily: document.getElementById('knowledge-cpu-family'),
+  knowledgeDocNumber: document.getElementById('knowledge-doc-number'),
+  knowledgeRevision: document.getElementById('knowledge-revision'),
+  knowledgeSection: document.getElementById('knowledge-section'),
+  knowledgePage: document.getElementById('knowledge-page'),
+  knowledgeLicense: document.getElementById('knowledge-license'),
+  knowledgeSubmit: document.getElementById('knowledge-submit'),
+  knowledgeList: document.getElementById('knowledge-list'),
+  sourcePreview: document.getElementById('source-preview'),
+  sourcePreviewLocation: document.getElementById('source-preview-location'),
+  sourcePreviewCode: document.getElementById('source-preview-code'),
+  sourcePreviewClose: document.getElementById('source-preview-close')
 };
 
 let selectedFiles = [];
 let currentAnalysis = null;
 let currentChangePlan = null;
 let currentSourceContent = '';
+let currentWorkspaceId = null;
+let currentSnapshotId = null;
+let currentArtifactTexts = new Map();
 let busy = false;
+let questionBusy = false;
+let knowledgeBusy = false;
 
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -169,11 +197,26 @@ function resetResults() {
   currentAnalysis = null;
   currentChangePlan = null;
   currentSourceContent = '';
+  currentWorkspaceId = null;
+  currentSnapshotId = null;
+  currentArtifactTexts = new Map();
   elements.analysisView.classList.add('hidden');
   elements.emptyState.classList.remove('hidden');
   elements.reportButtons.forEach((button) => {
     button.disabled = true;
   });
+  elements.questionAnswer.replaceChildren(
+    createElement(
+      'p',
+      'empty-panel-copy',
+      'Mitsubishi export를 분석하면 이곳에서 근거 기반 질문을 할 수 있습니다.'
+    )
+  );
+  elements.knowledgeList.replaceChildren(
+    createElement('p', 'empty-panel-copy', '아직 추가한 문서가 없습니다.')
+  );
+  elements.sourcePreview.classList.add('hidden');
+  updateQuestionAvailability();
 }
 
 function statusLabel(status) {
@@ -533,6 +576,10 @@ function renderAnalysis(analysis, changePlan = null) {
   elements.reportButtons.forEach((button) => {
     button.disabled = false;
   });
+  updateQuestionAvailability();
+  if (currentWorkspaceId) {
+    refreshKnowledgeDocuments();
+  }
 }
 
 function bytesToBase64(bytes) {
@@ -542,6 +589,16 @@ function bytesToBase64(bytes) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
+}
+
+function decodeArtifactBytes(bytes, encoding) {
+  const browserEncoding = {
+    cp949: 'euc-kr',
+    'shift-jis': 'shift_jis',
+    'windows-1252': 'windows-1252',
+    'utf-8': 'utf-8'
+  }[encoding] || 'utf-8';
+  return new TextDecoder(browserEncoding, { fatal: false }).decode(bytes);
 }
 
 function primaryFile(files) {
@@ -664,6 +721,389 @@ function renderImportReview(analysis) {
   }
 }
 
+function updateQuestionAvailability() {
+  const available = Boolean(
+    currentWorkspaceId &&
+      currentSnapshotId &&
+      currentAnalysis?.project?.vendor === 'mitsubishi'
+  );
+  const questionDisabled = !available || questionBusy;
+  const knowledgeDisabled = !available || knowledgeBusy;
+
+  elements.questionAvailability.textContent = available
+    ? '현재 Snapshot 사용 중'
+    : 'Mitsubishi 분석 후 사용 가능';
+  elements.questionAvailability.dataset.available = String(available);
+  elements.questionInput.disabled = questionDisabled;
+  elements.questionSubmit.disabled =
+    questionDisabled || elements.questionInput.value.trim().length === 0;
+  elements.questionSubmit.textContent = questionBusy ? '근거 찾는 중…' : '근거 답변 만들기';
+  elements.questionExampleButtons.forEach((button) => {
+    button.disabled = questionDisabled;
+  });
+
+  [
+    elements.knowledgeFile,
+    elements.knowledgeSourceType,
+    elements.knowledgeCpuFamily,
+    elements.knowledgeDocNumber,
+    elements.knowledgeRevision,
+    elements.knowledgeSection,
+    elements.knowledgePage,
+    elements.knowledgeLicense
+  ].forEach((control) => {
+    control.disabled = knowledgeDisabled;
+  });
+  elements.knowledgeSubmit.disabled = knowledgeDisabled;
+  elements.knowledgeSubmit.textContent = knowledgeBusy ? '로컬 색인 중…' : '문서 색인하기';
+
+  if (available && !elements.knowledgeCpuFamily.value) {
+    elements.knowledgeCpuFamily.value = {
+      'mitsubishi-fx3': 'FX3',
+      'mitsubishi-q': 'QCPU',
+      'mitsubishi-l': 'LCPU'
+    }[currentAnalysis.project.cpuProfileId] || '';
+  }
+}
+
+function appendAnswerSection(parent, title, items, className = '') {
+  if (!Array.isArray(items) || !items.length) return;
+  const section = createElement('section', className);
+  section.append(createElement('h4', '', title));
+  appendList(section, items);
+  parent.append(section);
+}
+
+function formatSourceLocation(source) {
+  if (!source?.filename) return '원문 위치 정보 없음';
+  const lineStart = Number.isInteger(source.lineStart) ? source.lineStart : null;
+  const lineEnd = Number.isInteger(source.lineEnd) ? source.lineEnd : lineStart;
+  const lines = lineStart
+    ? lineEnd && lineEnd !== lineStart
+      ? `${lineStart}–${lineEnd}줄`
+      : `${lineStart}줄`
+    : '줄 번호 확인 필요';
+  return `${source.filename} · ${lines}`;
+}
+
+function openSourceAnchor(source) {
+  const filename = typeof source?.filename === 'string' ? source.filename : '';
+  const sourceText = currentArtifactTexts.get(filename);
+  const lineStart = Math.max(1, Number.isInteger(source?.lineStart) ? source.lineStart : 1);
+  const requestedEnd = Number.isInteger(source?.lineEnd) ? source.lineEnd : lineStart;
+  const lineEnd = Math.max(lineStart, Math.min(requestedEnd, lineStart + 39));
+
+  elements.sourcePreview.classList.remove('hidden');
+  elements.sourcePreviewLocation.textContent = formatSourceLocation(source);
+
+  if (typeof sourceText !== 'string') {
+    elements.sourcePreviewCode.textContent =
+      '이 근거의 원문 파일이 현재 브라우저에 없습니다. 해당 export를 다시 선택해 분석해 주세요.';
+  } else {
+    const lines = sourceText.split(/\r?\n/);
+    const from = Math.max(1, lineStart - 2);
+    const to = Math.min(lines.length, lineEnd + 2);
+    const width = String(to).length;
+    elements.sourcePreviewCode.textContent = lines
+      .slice(from - 1, to)
+      .map((line, index) => {
+        const number = from + index;
+        const marker = number >= lineStart && number <= lineEnd ? '>' : ' ';
+        return `${marker} ${String(number).padStart(width, ' ')} │ ${line}`;
+      })
+      .join('\n');
+  }
+
+  elements.sourcePreview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  elements.sourcePreviewCode.focus({ preventScroll: true });
+}
+
+function renderEvidenceCard(entry) {
+  const card = createElement('article', 'evidence-card');
+  const heading = createElement('div', 'evidence-card-heading');
+  heading.append(createElement('strong', '', entry.label || entry.kind || '근거'));
+  heading.append(createElement('span', '', entry.kind === 'knowledge' ? '로컬 문서' : 'Export'));
+  card.append(heading);
+
+  if (entry.kind === 'knowledge') {
+    const citation = entry.citation || {};
+    const citationParts = [
+      citation.documentNumber,
+      citation.revision ? `개정 ${citation.revision}` : '',
+      citation.section,
+      citation.page ? `${citation.page}쪽` : ''
+    ].filter(Boolean);
+    card.append(
+      createElement(
+        'p',
+        'evidence-location',
+        citationParts.length ? citationParts.join(' · ') : citation.filename || '문서 위치 확인 필요'
+      )
+    );
+    if (entry.snippet) {
+      card.append(createElement('blockquote', 'knowledge-snippet', entry.snippet));
+    }
+  } else if (entry.source) {
+    card.append(createElement('p', 'evidence-location', formatSourceLocation(entry.source)));
+    const sourceButton = createElement('button', 'source-link-button', '원문 위치 열기');
+    sourceButton.type = 'button';
+    sourceButton.addEventListener('click', () => openSourceAnchor(entry.source));
+    card.append(sourceButton);
+  } else {
+    card.append(createElement('p', 'evidence-location', '직접 원문 위치 정보 없음'));
+  }
+  return card;
+}
+
+function renderGroundedAnswer(result) {
+  const host = elements.questionAnswer;
+  host.replaceChildren();
+  const answer = result?.answer || {};
+  const confidence = Math.max(0, Math.min(1, Number(answer.confidence) || 0));
+  const confidencePercent = Math.round(confidence * 100);
+
+  const summary = createElement('article', 'grounded-answer-card');
+  const heading = createElement('div', 'answer-heading');
+  const headingCopy = createElement('div');
+  headingCopy.append(createElement('span', 'step-kicker', '근거 답변'));
+  headingCopy.append(
+    createElement(
+      'h3',
+      '',
+      answer.conclusion?.length ? answer.conclusion.join(' ') : '현재 근거로 결론을 확정할 수 없습니다'
+    )
+  );
+  heading.append(headingCopy);
+  const confidenceBox = createElement('div', 'confidence-box');
+  confidenceBox.append(createElement('strong', '', `신뢰도 ${confidencePercent}%`));
+  const meter = createElement('progress');
+  meter.max = 100;
+  meter.value = confidencePercent;
+  meter.setAttribute('aria-label', `답변 신뢰도 ${confidencePercent}%`);
+  confidenceBox.append(meter);
+  heading.append(confidenceBox);
+  summary.append(heading);
+
+  const meta = createElement('div', 'answer-meta');
+  meta.append(createElement('span', '', `질문 유형: ${result.questionType || '분류 안 됨'}`));
+  meta.append(createElement('span', '', `근거 ${result.evidence?.length || 0}개`));
+  meta.append(createElement('span', '', 'PLC 쓰기 없음'));
+  summary.append(meta);
+
+  appendAnswerSection(summary, '설명', answer.explanation, 'answer-explanation');
+  appendAnswerSection(summary, '확인되지 않은 점', answer.unknowns, 'answer-unknowns');
+  appendAnswerSection(summary, '전제', answer.assumptions, 'answer-assumptions');
+  appendAnswerSection(summary, '다음 확인', answer.suggestedNextChecks, 'answer-next-checks');
+  host.append(summary);
+
+  const evidenceSection = createElement('section', 'answer-evidence');
+  evidenceSection.append(createElement('h3', '', `사용한 근거 ${result.evidence?.length || 0}개`));
+  if (result.evidence?.length) {
+    const evidenceList = createElement('div', 'answer-evidence-list');
+    result.evidence.forEach((entry) => evidenceList.append(renderEvidenceCard(entry)));
+    evidenceSection.append(evidenceList);
+  } else {
+    evidenceSection.append(
+      createElement(
+        'p',
+        'empty-panel-copy',
+        '직접 근거를 찾지 못했습니다. 주소와 export 범위를 확인해 주세요.'
+      )
+    );
+  }
+  if (result.knowledgeSearch?.warnings?.length) {
+    appendAnswerSection(
+      evidenceSection,
+      '문서 검색에서 제외된 항목',
+      result.knowledgeSearch.warnings.map((warning) =>
+        warning.code === 'KNOWLEDGE_CPU_FAMILY_FILTERED'
+          ? '현재 Snapshot과 CPU 계열이 다른 문서는 근거에서 제외했습니다.'
+          : warning.detail || warning.code
+      ),
+      'answer-unknowns'
+    );
+  }
+  host.append(evidenceSection);
+}
+
+async function askGroundedQuestion(event) {
+  event.preventDefault();
+  const question = elements.questionInput.value.trim();
+  if (!currentSnapshotId || !question || questionBusy) return;
+
+  questionBusy = true;
+  updateQuestionAvailability();
+  setMessage('현재 Snapshot과 로컬 문서에서 직접 근거를 찾고 있습니다.');
+  try {
+    const response = await requestJson(
+      `/api/v2/snapshots/${encodeURIComponent(currentSnapshotId)}/questions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'grounded',
+          question,
+          includeManualEvidence: elements.includeManualEvidence.checked,
+          maxTraceDepth: 4
+        })
+      }
+    );
+    renderGroundedAnswer(response.data);
+    setMessage(
+      response.data.evidence?.length
+        ? `근거 ${response.data.evidence.length}개로 답변했습니다. 원문 위치를 직접 확인해 주세요.`
+        : '직접 근거가 없어 결론을 확정하지 않았습니다.',
+      response.data.evidence?.length ? 'success' : 'warning'
+    );
+  } catch (error) {
+    elements.questionAnswer.replaceChildren(
+      createElement(
+        'p',
+        'empty-panel-copy',
+        error instanceof Error ? error.message : '근거 질문에 답하지 못했습니다.'
+      )
+    );
+    setMessage(error instanceof Error ? error.message : '근거 질문에 답하지 못했습니다.', 'error');
+  } finally {
+    questionBusy = false;
+    updateQuestionAvailability();
+  }
+}
+
+function renderKnowledgeDocuments(documents) {
+  elements.knowledgeList.replaceChildren();
+  if (!documents.length) {
+    elements.knowledgeList.append(
+      createElement('p', 'empty-panel-copy', '아직 추가한 문서가 없습니다.')
+    );
+    return;
+  }
+
+  documents.forEach((document) => {
+    const card = createElement('article', 'knowledge-document-card');
+    const copy = createElement('div');
+    copy.append(createElement('strong', '', document.filename));
+    copy.append(
+      createElement(
+        'small',
+        '',
+        [
+          document.family || 'CPU 공통',
+          document.documentNumber,
+          document.revision ? `개정 ${document.revision}` : '',
+          `${document.chunkCount}개 조각`,
+          '메모리 전용'
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      )
+    );
+    card.append(copy);
+    const removeButton = createElement('button', 'text-button', '빼기');
+    removeButton.type = 'button';
+    removeButton.addEventListener('click', async () => {
+      if (!currentWorkspaceId) return;
+      const workspaceId = currentWorkspaceId;
+      removeButton.disabled = true;
+      try {
+        await requestJson(
+          `/api/v2/workspaces/${encodeURIComponent(workspaceId)}/knowledge-documents/${encodeURIComponent(document.id)}`,
+          { method: 'DELETE' }
+        );
+        if (workspaceId === currentWorkspaceId) {
+          await refreshKnowledgeDocuments();
+          setMessage(`${document.filename} 로컬 색인을 뺐습니다.`, 'success');
+        }
+      } catch (error) {
+        removeButton.disabled = false;
+        setMessage(error instanceof Error ? error.message : '문서를 빼지 못했습니다.', 'error');
+      }
+    });
+    card.append(removeButton);
+    elements.knowledgeList.append(card);
+  });
+}
+
+async function refreshKnowledgeDocuments() {
+  if (!currentWorkspaceId) return;
+  const workspaceId = currentWorkspaceId;
+  try {
+    const response = await requestJson(
+      `/api/v2/workspaces/${encodeURIComponent(workspaceId)}/knowledge-documents`
+    );
+    if (workspaceId === currentWorkspaceId) {
+      renderKnowledgeDocuments(Array.isArray(response.data) ? response.data : []);
+    }
+  } catch (error) {
+    if (workspaceId === currentWorkspaceId) {
+      elements.knowledgeList.replaceChildren(
+        createElement(
+          'p',
+          'empty-panel-copy',
+          error instanceof Error ? error.message : '문서 목록을 불러오지 못했습니다.'
+        )
+      );
+    }
+  }
+}
+
+async function importKnowledgeDocument(event) {
+  event.preventDefault();
+  const file = elements.knowledgeFile.files?.[0];
+  if (!currentWorkspaceId || !file || knowledgeBusy) {
+    setMessage('먼저 Mitsubishi export를 분석하고 TXT 또는 Markdown 문서를 선택해 주세요.', 'error');
+    return;
+  }
+  if (file.size > 1_000_000) {
+    setMessage('로컬 문서는 1MB 이하만 색인할 수 있습니다.', 'error');
+    return;
+  }
+
+  const rawPage = Number.parseInt(elements.knowledgePage.value, 10);
+  const workspaceId = currentWorkspaceId;
+  knowledgeBusy = true;
+  updateQuestionAvailability();
+  setMessage(`${file.name} 문서를 브라우저 세션의 로컬 메모리에 색인하고 있습니다.`);
+  try {
+    const response = await requestJson(
+      `/api/v2/workspaces/${encodeURIComponent(workspaceId)}/knowledge-documents`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          content: await file.text(),
+          sourceType: elements.knowledgeSourceType.value,
+          vendor: 'mitsubishi',
+          family: elements.knowledgeCpuFamily.value.trim(),
+          cpuModels: currentAnalysis?.project?.cpuProfileId
+            ? [currentAnalysis.project.cpuProfileId]
+            : [],
+          engineeringTool: 'GX Works2',
+          documentNumber: elements.knowledgeDocNumber.value.trim(),
+          revision: elements.knowledgeRevision.value.trim(),
+          section: elements.knowledgeSection.value.trim(),
+          page: Number.isInteger(rawPage) && rawPage > 0 ? rawPage : null,
+          licensePolicy: elements.knowledgeLicense.value
+        })
+      }
+    );
+    if (workspaceId !== currentWorkspaceId) return;
+    elements.knowledgeFile.value = '';
+    await refreshKnowledgeDocuments();
+    const warningCount = response.data.warnings?.length || 0;
+    setMessage(
+      response.data.reused
+        ? `${file.name}은 이미 같은 내용으로 색인되어 기존 문서를 재사용했습니다.`
+        : `${file.name}을 로컬 메모리에 색인했습니다.${warningCount ? ` 지시문 형태 문단 ${warningCount}개는 제외했습니다.` : ''}`,
+      warningCount ? 'warning' : 'success'
+    );
+  } catch (error) {
+    setMessage(error instanceof Error ? error.message : '문서를 색인하지 못했습니다.', 'error');
+  } finally {
+    knowledgeBusy = false;
+    updateQuestionAvailability();
+  }
+}
+
 async function analyzeSelectedFiles(vendor) {
   if (!selectedFiles.length) {
     return null;
@@ -675,6 +1115,7 @@ async function analyzeSelectedFiles(vendor) {
     }
     setMessage('1/2 · Siemens XML 파일을 읽고 있습니다.');
     currentSourceContent = await selectedFiles[0].text();
+    currentArtifactTexts = new Map([[selectedFiles[0].name, currentSourceContent]]);
     const response = await requestJson('/api/v1/analyses', {
       method: 'POST',
       body: JSON.stringify({
@@ -688,15 +1129,23 @@ async function analyzeSelectedFiles(vendor) {
   }
 
   setMessage(`1/2 · Mitsubishi export ${selectedFiles.length}개를 읽고 있습니다.`);
+  currentArtifactTexts = new Map();
   const artifacts = await Promise.all(
-    selectedFiles.map(async (file) => ({
-      filename: file.name,
-      contentBase64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
-      encoding: elements.fileEncoding.value
-    }))
+    selectedFiles.map(async (file) => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      currentArtifactTexts.set(
+        file.name,
+        decodeArtifactBytes(bytes, elements.fileEncoding.value)
+      );
+      return {
+        filename: file.name,
+        contentBase64: bytesToBase64(bytes),
+        encoding: elements.fileEncoding.value
+      };
+    })
   );
   const sourceFile = primaryFile(selectedFiles);
-  currentSourceContent = await sourceFile.text();
+  currentSourceContent = currentArtifactTexts.get(sourceFile.name) || '';
   const workspaceResponse = await requestJson('/api/v2/workspaces', {
     method: 'POST',
     body: JSON.stringify({
@@ -705,6 +1154,7 @@ async function analyzeSelectedFiles(vendor) {
       cpuProfileId: selectedCpuProfile()
     })
   });
+  currentWorkspaceId = workspaceResponse.data.id;
   const importResponse = await requestJson(
     `/api/v2/workspaces/${encodeURIComponent(workspaceResponse.data.id)}/artifacts`,
     {
@@ -715,6 +1165,7 @@ async function analyzeSelectedFiles(vendor) {
       })
     }
   );
+  currentSnapshotId = importResponse.data.snapshot.id;
   currentAnalysis = bundleRecordToAnalysis(
     importResponse.data,
     workspaceResponse.data,
@@ -877,6 +1328,8 @@ function handleFileSelection() {
 }
 
 elements.form.addEventListener('submit', createChangePlan);
+elements.questionForm.addEventListener('submit', askGroundedQuestion);
+elements.knowledgeForm.addEventListener('submit', importKnowledgeDocument);
 elements.fileInput.addEventListener('change', handleFileSelection);
 elements.clearFile.addEventListener('click', () => {
   elements.fileInput.value = '';
@@ -884,6 +1337,7 @@ elements.clearFile.addEventListener('click', () => {
   setMessage('파일을 뺐습니다. 신규 회로 초안 모드로 바뀌었습니다.');
 });
 elements.changeRequest.addEventListener('input', updatePrimaryState);
+elements.questionInput.addEventListener('input', updateQuestionAvailability);
 elements.safetyAck.addEventListener('change', updatePrimaryState);
 elements.cpuProfile.addEventListener('change', () => {
   resetResults();
@@ -901,6 +1355,17 @@ elements.exampleButtons.forEach((button) => {
     setMessage('예시 문장을 넣었습니다. 주소와 조건을 원하는 값으로 바꿔도 됩니다.');
   });
 });
+elements.questionExampleButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    elements.questionInput.value = button.dataset.questionExample || '';
+    elements.questionInput.focus();
+    updateQuestionAvailability();
+    setMessage('추천 질문을 넣었습니다. 주소를 현재 프로젝트 값으로 바꿔도 됩니다.');
+  });
+});
+elements.sourcePreviewClose.addEventListener('click', () => {
+  elements.sourcePreview.classList.add('hidden');
+});
 document.querySelectorAll('input[name="assistant-version"]').forEach((input) => {
   input.addEventListener('change', () => {
     resetResults();
@@ -916,5 +1381,6 @@ elements.reportButtons.forEach((button) => {
 
 updateModeHint();
 updatePrimaryState();
+updateQuestionAvailability();
 activateTab('change');
 checkHealth();

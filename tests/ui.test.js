@@ -51,3 +51,30 @@ test('review UI explains unverified timer profiles instead of presenting executa
   assert.match(appJs, /review-only/);
   assert.match(appJs, /CPU·타이머 기준/);
 });
+
+test('grounded question UI exposes recommended questions, confidence, evidence, and original source navigation', () => {
+  const examples = indexHtml.match(/data-question-example=/g) || [];
+
+  assert.equal(examples.length >= 5, true);
+  assert.match(indexHtml, /data-tab="question"/);
+  assert.match(indexHtml, /id="question-input"[\s\S]*maxlength="1000"/);
+  assert.match(indexHtml, /id="question-answer"/);
+  assert.match(indexHtml, /id="source-preview-code"/);
+  assert.match(appJs, /\/api\/v2\/snapshots\/\$\{encodeURIComponent\(currentSnapshotId\)\}\/questions/);
+  assert.match(appJs, /function renderGroundedAnswer/);
+  assert.match(appJs, /function openSourceAnchor/);
+  assert.match(appJs, /currentArtifactTexts/);
+  assert.doesNotMatch(appJs, /\.innerHTML\s*=/);
+  assert.match(stylesCss, /\.grounded-question-layout/);
+  assert.match(stylesCss, /\.confidence-box/);
+});
+
+test('local knowledge UI keeps approved documents workspace-scoped and memory-only', () => {
+  assert.match(indexHtml, /id="knowledge-form"/);
+  assert.match(indexHtml, /accept="\.txt,\.md"/);
+  assert.match(indexHtml, /value="local-index-only"/);
+  assert.match(indexHtml, /외부 AI나 검색 서비스로 전송하지 않습니다/);
+  assert.match(appJs, /\/knowledge-documents/);
+  assert.match(appJs, /file\.size > 1_000_000/);
+  assert.match(appJs, /engineeringTool: 'GX Works2'/);
+});

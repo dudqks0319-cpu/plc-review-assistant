@@ -5,6 +5,8 @@ import {
   traceBackward,
   traceForward
 } from '../domain/dataFlow.js';
+import { answerGroundedQuestion } from './groundedQuestion.js';
+import { createKnowledgeBase } from './knowledgeBase.js';
 
 const MAX_WORKSPACES = 8;
 const MAX_SNAPSHOTS_PER_WORKSPACE = 10;
@@ -38,6 +40,7 @@ function serializeReferenceIndex(index) {
 export function createWorkspaceService() {
   const workspaces = new Map();
   const snapshotRecords = new Map();
+  const knowledgeBase = createKnowledgeBase();
 
   function getWorkspaceOrThrow(id) {
     const workspace = workspaces.get(id);
@@ -92,6 +95,7 @@ export function createWorkspaceService() {
       for (const snapshotId of workspace.snapshotIds) {
         snapshotRecords.delete(snapshotId);
       }
+      knowledgeBase.deleteWorkspace(id);
       workspaces.delete(id);
       return {
         id,
@@ -143,6 +147,44 @@ export function createWorkspaceService() {
 
     getFindings(id) {
       return getSnapshotRecordOrThrow(id).findings;
+    },
+
+    askQuestion(id, input = {}) {
+      const record = getSnapshotRecordOrThrow(id);
+      const workspace = getWorkspaceOrThrow(record.snapshot.workspaceId);
+      const mode = typeof input.mode === 'string' ? input.mode : 'grounded';
+      if (mode !== 'grounded') {
+        throw serviceError(
+          'QUESTION_MODE_UNSUPPORTED',
+          'Only grounded question mode is supported.'
+        );
+      }
+      const question = typeof input.question === 'string' ? input.question.trim() : '';
+      const includeManualEvidence = input.includeManualEvidence !== false;
+      const manualEvidence = includeManualEvidence
+        ? knowledgeBase.search(workspace, question, { limit: 4 })
+        : { results: [], warnings: [], strategy: 'disabled' };
+      return answerGroundedQuestion({
+        snapshot: record.snapshot,
+        question,
+        maxTraceDepth: input.maxTraceDepth,
+        manualEvidence
+      });
+    },
+
+    importKnowledgeDocument(id, input = {}) {
+      const workspace = getWorkspaceOrThrow(id);
+      return knowledgeBase.importDocument(workspace, input);
+    },
+
+    listKnowledgeDocuments(id) {
+      getWorkspaceOrThrow(id);
+      return knowledgeBase.listDocuments(id);
+    },
+
+    deleteKnowledgeDocument(id, documentId) {
+      getWorkspaceOrThrow(id);
+      return knowledgeBase.deleteDocument(id, documentId);
     },
 
     getDataFlow(id) {

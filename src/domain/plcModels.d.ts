@@ -171,3 +171,94 @@ export interface ProjectBundleRecord {
   }>;
   reused?: boolean;
 }
+
+export type GroundedQuestionType =
+  | 'output-on-locations'
+  | 'output-off-locations'
+  | 'why-output-not-on'
+  | 'set-reset-locations'
+  | 'duplicate-output-writers'
+  | 'input-output-impact'
+  | 'timer-duration'
+  | 'network-explanation'
+  | 'program-conditions'
+  | 'change-impact'
+  | 'unsupported';
+
+export interface KnowledgeCitation {
+  filename: string;
+  sourceType: 'vendor-manual' | 'company-rule' | 'approved-case' | 'public-guideline';
+  vendor: string;
+  family: string | null;
+  documentNumber: string | null;
+  revision: string | null;
+  section: string | null;
+  page: number | null;
+  licensePolicy: 'local-index-only' | 'redistributable' | 'unknown';
+}
+
+export interface GroundedEvidence {
+  id: string;
+  kind: 'instruction' | 'reference' | 'data-flow-edge' | 'knowledge';
+  label: string;
+  source?: SourceAnchor;
+  citation?: KnowledgeCitation;
+  snippet?: string;
+  contentHash?: string;
+  evidenceLevel: EvidenceLevel;
+}
+
+export interface GroundedAnswer {
+  conclusion: string[];
+  explanation: string[];
+  evidenceIds: string[];
+  unknowns: string[];
+  assumptions: string[];
+  confidence: number;
+  suggestedNextChecks: string[];
+}
+
+export interface GroundedQuestionResult {
+  question: string;
+  questionType: GroundedQuestionType;
+  plan: {
+    questionType: GroundedQuestionType;
+    targetAddress: string | null;
+    maxTraceDepth: number;
+    toolCalls: string[];
+  };
+  answer: GroundedAnswer;
+  evidence: GroundedEvidence[];
+  knowledgeSearch: {
+    strategy: string;
+    warnings: Array<{ code: string; detail?: string; documentId?: string }>;
+    resultCount: number;
+  };
+  policy: {
+    mode: 'grounded';
+    generatedAddressCount: 0;
+    writesToPlc: false;
+    externalNetworkUsed: false;
+  };
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  filename: string;
+  sourceType: KnowledgeCitation['sourceType'];
+  vendor: string;
+  family: string;
+  cpuModels: string[];
+  engineeringTool: string;
+  documentNumber: string;
+  revision: string;
+  section: string;
+  page: number | null;
+  contentHash: string;
+  licensePolicy: KnowledgeCitation['licensePolicy'];
+  sizeBytes: number;
+  chunkCount: number;
+  warnings: Array<{ code: string; detail: string }>;
+  storage: 'memory-only';
+  createdAt: string;
+}

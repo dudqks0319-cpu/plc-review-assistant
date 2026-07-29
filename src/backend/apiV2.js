@@ -56,6 +56,39 @@ export async function handleApiV2Request({
     };
   }
 
+  params = routeMatch(pathname, /^\/api\/v2\/workspaces\/([^/]+)\/knowledge-documents$/);
+  if (params) {
+    const [workspaceId] = params;
+    if (method === 'GET') {
+      return {
+        handled: true,
+        statusCode: 200,
+        data: workspaceService.listKnowledgeDocuments(workspaceId)
+      };
+    }
+    if (method === 'POST') {
+      return {
+        handled: true,
+        statusCode: 201,
+        data: workspaceService.importKnowledgeDocument(workspaceId, await readJson())
+      };
+    }
+    methodNotAllowed();
+  }
+
+  params = routeMatch(
+    pathname,
+    /^\/api\/v2\/workspaces\/([^/]+)\/knowledge-documents\/([^/]+)$/
+  );
+  if (params) {
+    if (method !== 'DELETE') methodNotAllowed();
+    return {
+      handled: true,
+      statusCode: 200,
+      data: workspaceService.deleteKnowledgeDocument(params[0], params[1])
+    };
+  }
+
   params = routeMatch(pathname, /^\/api\/v2\/snapshots\/([^/]+)$/);
   if (params) {
     if (method !== 'GET') methodNotAllowed();
@@ -83,6 +116,16 @@ export async function handleApiV2Request({
       handled: true,
       statusCode: 200,
       data: workspaceService.getFindings(params[0])
+    };
+  }
+
+  params = routeMatch(pathname, /^\/api\/v2\/snapshots\/([^/]+)\/questions$/);
+  if (params) {
+    if (method !== 'POST') methodNotAllowed();
+    return {
+      handled: true,
+      statusCode: 201,
+      data: workspaceService.askQuestion(params[0], await readJson())
     };
   }
 

@@ -35,6 +35,11 @@ Explicitly out of scope:
 - Normalizes exported PLC data into projects, blocks, variables, I/O addresses, and call edges
 - Preserves SHA-256 source anchors for parsed instructions and findings
 - Builds reader/writer/SET/RST cross-references and bounded forward/backward data-flow traces
+- Answers ten deterministic Mitsubishi review-question types from the current immutable snapshot
+- Opens every export-based answer at its exact source line and keeps unsupported facts as `Unknown`
+- Indexes approved TXT/Markdown manuals, internal rules, and reviewed cases in process memory only
+- Filters local knowledge by vendor and CPU family before hybrid lexical retrieval
+- Cites document number, revision, section, page, and a short matching excerpt without redistributing source files
 - Flags static review candidates:
   - duplicate I/O address usage
   - missing block/tag comments
@@ -128,8 +133,62 @@ Review endpoints:
 - `GET /api/v2/snapshots/{snapshotId}/findings`
 - `GET /api/v2/snapshots/{snapshotId}/data-flow`
 - `GET /api/v2/snapshots/{snapshotId}/devices/{address}?maxTraceDepth=4`
+- `POST /api/v2/snapshots/{snapshotId}/questions`
 
 Defensive limits: 32 files per bundle, 2 MB per decoded file, 10 MB per bundle, 8 live workspaces, 10 snapshots per workspace, and 40 snapshots per process. ZIP extraction and path-like filenames are rejected.
+
+Ask a grounded question:
+
+```http
+POST /api/v2/snapshots/{snapshotId}/questions
+Content-Type: application/json
+
+{
+  "question": "왜 Y20이 안 켜질 수 있어?",
+  "mode": "grounded",
+  "maxTraceDepth": 4,
+  "includeManualEvidence": true
+}
+```
+
+The response contains a deterministic query plan, conclusion, verification
+steps, explicit unknowns, confidence, policy flags, and evidence records.
+Export evidence includes a `SourceAnchor`; local-document evidence includes a
+license-aware citation. The endpoint never invents an address and never writes
+to a PLC.
+
+Add an approved local document to the workspace:
+
+```http
+POST /api/v2/workspaces/{workspaceId}/knowledge-documents
+Content-Type: application/json
+
+{
+  "filename": "fx3-approved-note.md",
+  "sourceType": "approved-case",
+  "vendor": "mitsubishi",
+  "family": "FX3",
+  "documentNumber": "QA-FX3-001",
+  "revision": "A",
+  "section": "Y20 output review",
+  "page": 1,
+  "licensePolicy": "local-index-only",
+  "content": "Review the upstream conditions of the OUT instruction."
+}
+```
+
+Knowledge endpoints:
+
+- `GET /api/v2/workspaces/{workspaceId}/knowledge-documents`
+- `POST /api/v2/workspaces/{workspaceId}/knowledge-documents`
+- `DELETE /api/v2/workspaces/{workspaceId}/knowledge-documents/{documentId}`
+
+Only `.txt` and `.md` documents are accepted. A document is limited to 1 MB;
+each workspace is limited to 16 documents and 8 MB. The current implementation
+uses deterministic BM25-style lexical retrieval and a lexical reranker. It
+does not claim vector embeddings. Paragraphs that resemble prompt injection
+instructions are excluded from the searchable index. The entire knowledge
+index is memory-only and disappears when the local server stops.
 
 ### Compatibility API (v1)
 
@@ -228,8 +287,10 @@ facts must be verified first.
 ## Security Notes
 
 - Uploaded content is analyzed in memory and is not written to disk by the app.
+- Local knowledge documents are indexed in process memory only; the UI sends them only to the same loopback server.
 - Mutating API requests accept local same-origin JSON only; cross-site and non-JSON requests are rejected.
 - Filenames, extensions, declared encodings, decoded sizes, bundle totals, and in-memory object counts are bounded before parsing.
+- Knowledge searches reject cross-vendor and cross-CPU-family evidence and exclude prompt-like instruction paragraphs.
 - Raw IP addresses are not stored or logged.
 - Candidate modified files are generated in the server response and downloaded by the browser; the app does not overwrite the original uploaded file.
 - No secrets are required for the default deterministic MVP.

@@ -184,6 +184,121 @@ test('API v2 creates an in-memory workspace, imports a bundle, and exposes devic
   );
 });
 
+test('API v2 answers grounded questions and cites CPU-filtered local knowledge', async () => {
+  const workspaceResponse = await requestJson('/api/v2/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Grounded FX3 review',
+      vendor: 'mitsubishi',
+      cpuProfileId: 'mitsubishi-fx3'
+    })
+  });
+  const workspaceId = workspaceResponse.body.data.id;
+
+  const fxManual = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/knowledge-documents`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: 'fx3-local-manual.md',
+        sourceType: 'vendor-manual',
+        vendor: 'mitsubishi',
+        family: 'FX3',
+        documentNumber: 'FX3-LOCAL-001',
+        section: 'Output control',
+        page: 18,
+        licensePolicy: 'local-index-only',
+        content: 'Y output writer conditions and stop interlocks must be reviewed together.'
+      })
+    }
+  );
+  assert.equal(fxManual.response.status, 201);
+
+  await requestJson(`/api/v2/workspaces/${workspaceId}/knowledge-documents`, {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: 'qcpu-local-manual.md',
+      sourceType: 'vendor-manual',
+      vendor: 'mitsubishi',
+      family: 'QCPU',
+      licensePolicy: 'local-index-only',
+      content: 'Y output writer conditions for QCPU use a family-specific reference.'
+    })
+  });
+
+  const imported = await requestJson(`/api/v2/workspaces/${workspaceId}/artifacts`, {
+    method: 'POST',
+    body: JSON.stringify({
+      artifacts: [
+        {
+          filename: 'labels.csv',
+          content:
+            'Label,Device,Comment,Program\nStartSwitch,X0,Start command,MAIN\nStopSwitch,X1,Stop command,MAIN\nRun,Y20,Conveyor output,MAIN'
+        },
+        {
+          filename: 'main.lst',
+          content: 'PROGRAM MAIN\nNETWORK 1\nLD X0\nANI X1\nOUT Y20\nEND'
+        }
+      ]
+    })
+  });
+  const snapshotId = imported.body.data.snapshot.id;
+
+  const question = await requestJson(`/api/v2/snapshots/${snapshotId}/questions`, {
+    method: 'POST',
+    body: JSON.stringify({
+      question: '왜 Y20이 안 켜질 수 있어?',
+      mode: 'grounded',
+      maxTraceDepth: 4,
+      includeManualEvidence: true
+    })
+  });
+
+  assert.equal(question.response.status, 201);
+  assert.match(question.body.requestId, /^req-/);
+  assert.equal(question.body.data.questionType, 'why-output-not-on');
+  assert.equal(question.body.data.answer.conclusion.some((item) => item.includes('Y20')), true);
+  assert.equal(question.body.data.answer.evidenceIds.length > 0, true);
+  assert.equal(
+    question.body.data.answer.evidenceIds.every((id) =>
+      question.body.data.evidence.some((entry) => entry.id === id)
+    ),
+    true
+  );
+  assert.equal(
+    question.body.data.evidence.some(
+      (entry) => entry.kind === 'knowledge' && entry.citation.filename === 'fx3-local-manual.md'
+    ),
+    true
+  );
+  assert.equal(
+    question.body.data.evidence.some(
+      (entry) => entry.kind === 'knowledge' && entry.citation.filename === 'qcpu-local-manual.md'
+    ),
+    false
+  );
+  assert.equal(
+    question.body.data.knowledgeSearch.warnings.some(
+      (warning) => warning.code === 'KNOWLEDGE_CPU_FAMILY_FILTERED'
+    ),
+    true
+  );
+  assert.equal(question.body.data.policy.externalNetworkUsed, false);
+
+  const listed = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/knowledge-documents`
+  );
+  assert.equal(listed.response.status, 200);
+  assert.equal(listed.body.data.length, 2);
+
+  const deleted = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/knowledge-documents/${fxManual.body.data.id}`,
+    { method: 'DELETE' }
+  );
+  assert.equal(deleted.response.status, 200);
+  assert.equal(deleted.body.data.storage, 'memory-only');
+});
+
 test('API mutations reject cross-site and non-JSON requests', async () => {
   const crossSite = await fetch(`${baseUrl}/api/v2/workspaces`, {
     method: 'POST',
