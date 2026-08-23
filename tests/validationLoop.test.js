@@ -215,6 +215,85 @@ test('manual validation records keep GX Works, approval, and field gates separat
   assert.equal(result.summary.overallStatus, 'not-run');
 });
 
+test('manual pass records require evidence and V9 approval role', () => {
+  assert.throws(
+    () =>
+      createManualValidationRecord({
+        level: 'V8',
+        status: 'pass',
+        tool: 'GX Works2'
+      }),
+    (error) =>
+      error.code === 'INVALID_VALIDATION_RECORD' &&
+      /evidence/i.test(error.message)
+  );
+  assert.throws(
+    () =>
+      createManualValidationRecord({
+        level: 'V9',
+        status: 'pass',
+        tool: 'Engineer approval record',
+        evidenceIds: ['approval-001']
+      }),
+    (error) =>
+      error.code === 'INVALID_VALIDATION_RECORD' &&
+      /reviewer role/i.test(error.message)
+  );
+  assert.throws(
+    () =>
+      createManualValidationRecord({
+        level: 'V10',
+        status: 'not-applicable',
+        tool: 'Field validation'
+      }),
+    (error) =>
+      error.code === 'INVALID_VALIDATION_RECORD' &&
+      /cannot be marked not-applicable/i.test(error.message)
+  );
+});
+
+test('complete manual upper-gate records never claim independently verified field success', () => {
+  const fixture = oneShotFixture();
+  const result = runValidationLoop({
+    ...fixture,
+    manualValidationRecords: [
+      {
+        level: 'V8',
+        status: 'pass',
+        tool: 'GX Works2 program check record',
+        evidenceIds: ['gx-check-001']
+      },
+      {
+        level: 'V9',
+        status: 'pass',
+        tool: 'Engineer approval record',
+        reviewerRole: 'plc-engineer',
+        evidenceIds: ['approval-001']
+      },
+      {
+        level: 'V10',
+        status: 'pass',
+        tool: 'Field validation record',
+        evidenceIds: ['field-check-001']
+      }
+    ],
+    now: '2026-08-03T00:00:00.000Z'
+  });
+  const approval = result.validationRuns.find((run) => run.level === 'V9');
+
+  assert.equal(result.summary.overallStatus, 'recorded');
+  assert.equal(
+    result.summary.externalEvidenceStatus,
+    'recorded-not-independently-verified'
+  );
+  assert.equal(result.summary.fieldBehaviorGuaranteed, false);
+  assert.equal(result.summary.safetySystemSuccessClaimed, false);
+  assert.equal(approval.reviewerRole, 'plc-engineer');
+  assert.equal(approval.qualificationVerified, false);
+  assert.equal(approval.claimScope, 'external-result-record-only');
+  assert.equal(result.policy.canWriteToPlc, false);
+});
+
 test('record-only external and GX Works adapters never execute tools or write to a PLC', async () => {
   const adapter = createRecordOnlyVendorAdapter({
     id: 'gxworks2-manual',

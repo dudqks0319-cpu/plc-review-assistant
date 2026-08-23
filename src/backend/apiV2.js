@@ -18,6 +18,13 @@ export async function handleApiV2Request({
   workspaceService
 }) {
   if (pathname === '/api/v2/workspaces') {
+    if (method === 'GET') {
+      return {
+        handled: true,
+        statusCode: 200,
+        data: workspaceService.listWorkspaces()
+      };
+    }
     if (method !== 'POST') methodNotAllowed();
     return {
       handled: true,
@@ -74,6 +81,56 @@ export async function handleApiV2Request({
       };
     }
     methodNotAllowed();
+  }
+
+  params = routeMatch(pathname, /^\/api\/v2\/workspaces\/([^/]+)\/audit$/);
+  if (params) {
+    if (method !== 'GET') methodNotAllowed();
+    return {
+      handled: true,
+      statusCode: 200,
+      data: workspaceService.getAudit(params[0])
+    };
+  }
+
+  params = routeMatch(pathname, /^\/api\/v2\/workspaces\/([^/]+)\/proposals$/);
+  if (params) {
+    if (method !== 'GET') methodNotAllowed();
+    return {
+      handled: true,
+      statusCode: 200,
+      data: workspaceService.listProposals(params[0])
+    };
+  }
+
+  params = routeMatch(pathname, /^\/api\/v2\/workspaces\/([^/]+)\/validations$/);
+  if (params) {
+    if (method !== 'GET') methodNotAllowed();
+    return {
+      handled: true,
+      statusCode: 200,
+      data: workspaceService.listValidations(params[0])
+    };
+  }
+
+  params = routeMatch(
+    pathname,
+    /^\/api\/v2\/workspaces\/([^/]+)\/proposals\/([^/]+)\/decisions$/
+  );
+  if (params) {
+    if (method !== 'POST') methodNotAllowed();
+    const body = await readJson();
+    return {
+      handled: true,
+      statusCode: 201,
+      data: workspaceService.recordProposalDecision({
+        workspaceId: params[0],
+        proposalId: params[1],
+        status: body.status,
+        reviewerRole: body.reviewerRole,
+        note: body.note
+      })
+    };
   }
 
   params = routeMatch(

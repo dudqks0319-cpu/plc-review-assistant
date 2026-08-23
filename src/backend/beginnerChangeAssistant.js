@@ -12,6 +12,10 @@ import {
   createTemplateTestScenarios
 } from '../application/changeCandidateV2.js';
 import { runValidationLoop } from '../application/validationLoop.js';
+import {
+  normalizeDownloadBaseName,
+  serializeCsv
+} from '../../public/exportContract.js';
 
 const HIGH_RISK_MACHINE_PROFILES = [
   {
@@ -76,14 +80,10 @@ function makeId(prefix, ...parts) {
 }
 
 function safeFilename(value, fallback = 'plc-program') {
-  const base = safeString(value, fallback, 240)
-    .split(/[\\/]/)
-    .pop()
-    .replace(/\.[^.]+$/, '')
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-  return base || fallback;
+  return normalizeDownloadBaseName(safeString(value, fallback, 240), {
+    fallbackBase: fallback,
+    maxLength: 120
+  });
 }
 
 function matchesHighRiskKeyword(text, keyword) {
@@ -483,7 +483,8 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
     const primaryPatch =
       vendor === 'siemens'
         ? findArtifact(plan, ['SCL'])
-        : findArtifact(plan, ['CSV', 'GX Works2 IL', 'GX Works listing']);
+        : findArtifact(plan, ['CSV']) ||
+          findArtifact(plan, ['GX Works2 IL', 'GX Works listing']);
 
     if (hasSource) {
       const modifiedContent = createModifiedCandidate({ plan, vendor, sourceContent });
@@ -515,7 +516,7 @@ function createCandidateFiles({ plan, analysis, vendor, sourceContent, sourceFil
         id: makeId('file', baseName, vendor, 'patch'),
         filename: `${baseName}.${vendor === 'siemens' ? 'candidate.scl' : 'review-list.csv'}`,
         label: vendor === 'siemens' ? 'SCL 패치 후보' : '검토용 CSV 목록 (Import 미검증)',
-        mimeType: 'text/plain; charset=utf-8',
+        mimeType: vendor === 'siemens' ? 'text/plain; charset=utf-8' : 'text/csv; charset=utf-8',
         content: primaryPatch.content
       });
     }
@@ -592,9 +593,9 @@ function synchronizeRepairedPatchArtifacts(plan) {
     return;
   }
   const instructionList = plan.circuitDraft.instructionList.join('\n');
-  const csv = plan.circuitDraft.instructionList
-    .map((line, index) => `${index + 1},"${line.replaceAll('"', '""')}"`)
-    .join('\n');
+  const csv = serializeCsv(
+    plan.circuitDraft.instructionList.map((line, index) => [index + 1, line])
+  );
   plan.recommendedPatch = {
     ...plan.recommendedPatch,
     patchArtifacts: (plan.recommendedPatch?.patchArtifacts || []).map(

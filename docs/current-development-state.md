@@ -2,7 +2,9 @@
 
 기준일: 2026-07-29  
 브랜치: `agent/plc-foundation`  
-Phase 7 완료 커밋: `b5d5eb7`
+Phase 8 완료 커밋: `0db802d`
+
+Phase 9 UI 설계 커밋: `42b7eda`
 
 이 문서는 상세 개발계획서의 단계와 현재 코드 증거를 연결하는 상태
 원장이다. 로컬 테스트 통과는 실제 GX Works2 Import, 현장 PLC 연결,
@@ -12,7 +14,7 @@ Pilot 승인 또는 Production 출시를 의미하지 않는다.
 
 | 단계 | 상태 | 현재 증거 | 남은 게이트 |
 | --- | --- | --- | --- |
-| Phase 0 브랜치 안정화 | 로컬 완료 | 전체 Node 테스트 71/71, `git diff --check` 통과 | 원격 CI는 별도 |
+| Phase 0 브랜치 안정화 | 로컬 완료 | 전체 Node 테스트 80/80, `git diff --check` 통과 | 원격 CI는 별도 |
 | Phase 1 Domain IR·SourceAnchor | 로컬 완료 | canonical snapshot, instruction/reference SourceAnchor, SHA-256 | 실제 익명화 프로젝트 교차 검증 |
 | Phase 2 CPU Profile·주소 파서 | 로컬 완료 | FX3/QCPU/LCPU profile, FX3 X/Y 8진 주소 테스트, Unknown timer 정책 | 더 많은 CPU 모델 공식표 |
 | Phase 3 Project Bundle·명령 파서 | 로컬 완료 | CSV/TXT/LST/ASC 다중 Import, 인코딩, immutable snapshot, unknown opcode 보존 | Golden Fixture 확대 |
@@ -21,8 +23,8 @@ Pilot 승인 또는 Production 출시를 의미하지 않는다.
 | Phase 6 RAG | 로컬 완료 | TXT/MD 메모리 색인, vendor/CPU 격리, 문서 citation, injection 문단 제외 | 벤더 공식 문서 권리 검토 |
 | Phase 7 변경 후보 v2 | 로컬 완료 | 저위험 8종 GX Works2 Renderer, Logic IR, R1~R4, Writer·주소 충돌, Template별 test/report | 실제 GX Works2 프로그램 체크·Pilot |
 | Phase 8 검증 루프 | 로컬 완료 | V0~V10 Matrix, 8종 Template simulator, Trend, 안전한 END 보정, 수동 검증 기록 adapter | 실제 GX Works2 프로그램 체크·엔지니어 승인·현장 검증 |
-| Phase 9 UI 전면 개선 | 일부 존재 | 근거 질문 UI, 키보드 focus, 44px 터치, 390px 가로 넘침 없음 | React/TypeScript, Project Tree, Network/Device/Data Flow 화면 |
-| Phase 10 패키징·Pilot | 일부 존재 | loopback 서버, Windows launcher | 재시작 복원, 삭제/로그 정책, macOS package, Pilot |
+| Phase 9 UI 전면 개선 | 설계 완료·구현 대기 | 데스크톱/모바일 시안, 컴포넌트·접근성 spec, 기존 근거 질문 UI | React/TypeScript 패키지 설치 승인, Project Tree, Network/Device/Data Flow 화면 |
+| Phase 10 패키징·Pilot | 로컬 기반 완료 | opt-in workspace, 재시작 복원, 삭제·Audit, 오프라인 흐름, Windows/macOS launcher | 독립 실행형 package, 실제 익명화 Pilot |
 
 ## Phase 5~6 확인 증거
 
@@ -59,7 +61,8 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 
 ## 다음 작업
 
-1. Phase 9에서 기존 화면을 React/TypeScript 컴포넌트 경계로 전환한다.
+1. React/TypeScript/Vite 고정 버전 설치 승인을 받은 뒤 Phase 9에서
+   기존 화면을 컴포넌트 경계로 전환한다.
 2. Project Tree, Network Viewer, Device Detail, Data Flow Graph를 현재
    immutable snapshot API에 연결한다.
 3. Grounded Chat과 Change Review를 하나의 프로젝트 검토 흐름으로
@@ -122,7 +125,7 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 - Validation Matrix와 Trend를 JSON 파일 및 검토 보고서로 제공한다.
 - 모바일 390×844 실제 화면에서 가로 넘침이 없고, 유효 클릭 영역은
   44px 이상이며, 넓은 Trend 표는 카드 안에서만 가로 스크롤된다.
-- 전체 Node 테스트 71/71 통과.
+- 전체 Node 테스트 80/80 통과.
 
 ## Phase 8 보안 게이트
 
@@ -140,3 +143,68 @@ FX3 fixture `fx3_octal.lst`와 승인 검토 메모를 로컬에서 불러와
 | 외부 ST 연동은 자동 실행이 아닌 수동 기록 adapter만 구현 | 개발 담당자 | Phase 10 Pilot 전 |
 | 실제 익명화 프로젝트에서 8종 시뮬레이터 정확도 미측정 | PLC 담당자 | Pilot 시작 전 |
 | V9 엔지니어 승인·V10 현장 검증 미실행 | 안전·PLC 담당자 | Production 전 |
+
+## Phase 10 로컬 기반 현재 증거
+
+- Workspace 생성 시 사용자가 `persistent`를 명시한 경우에만
+  `~/.plc-review-assistant/workspaces` 아래에 저장한다.
+- 기본값은 계속 `memory-only`이며 앱 종료 시 사라진다.
+- 저장 Workspace는 원본 파일 내용 대신 정규화 Snapshot, SourceAnchor,
+  파일 hash와 크기, Proposal lineage, Validation, 최소화된 Audit만
+  보관한다.
+- 질문과 검토 메모는 원문을 저장하지 않고 SHA-256 hash만 기록한다.
+- Candidate 파일도 내용 대신 파일명, hash, 크기만 기록한다.
+- Snapshot manifest는 Candidate가 어느 Snapshot에서 생성되었는지와
+  원본 Snapshot hash를 기록한다.
+- 로컬 승인·거부 기록은 `manual-review-only`,
+  `authorizationEffect: none`, `canWriteToPlc: false`로 고정된다.
+- R4 차단 Proposal의 승인 기록은 409로 거부한다.
+- Workspace 삭제 시 snapshots, proposals, validations, reports, indexes,
+  audit를 포함한 전용 디렉터리를 함께 삭제한다.
+- 서버 재시작 통합 테스트에서 persistent Workspace, `MAIN` 프로그램,
+  Proposal을 다시 불러왔고 삭제 후 저장 디렉터리가 비었음을 확인했다.
+- `fetch`를 실패시키는 오프라인 테스트에서 Import, 근거 질문,
+  변경 후보, V0~V6 검증이 외부 네트워크 호출 0건으로 완료됐다.
+- Windows/macOS launcher는 기본적으로 deterministic offline 모드를
+  실행하고 `PLC_USE_CODEX=1`일 때만 선택적 Codex 정규화를 사용한다.
+- 390×844 실제 브라우저에서 저장 선택 UI, 가로 넘침 없음, 유효 클릭
+  영역 44px 이상을 확인했다.
+
+## Phase 10 로컬 기반 보안 게이트
+
+- 저장 경로는 생성된 UUID Workspace ID와 고정 하위 디렉터리만 사용
+- Workspace·Snapshot·Proposal ID 형식 검증과 JSON/Audit 크기 제한 적용
+- 디렉터리 0700, 파일 0600, 임시 파일 후 atomic rename 적용
+- 심볼릭 링크인 저장 루트 거부
+- 손상된 manifest 또는 소유 Workspace가 다른 Snapshot/Proposal은
+  복원 시 신뢰하지 않음
+- same-origin JSON guard와 loopback bind 정책 유지
+- 비밀값·PLC 자격증명·원문 전체를 로그에 기록하지 않음
+- 의존성 추가 없음
+
+| 잔여 위험 | 담당 | 완료 기한 |
+| --- | --- | --- |
+| React/TypeScript Phase 9 구현은 패키지 설치 승인 대기 | 개발 담당자 | Phase 9 완료 전 |
+| Windows/macOS 독립 실행형 패키지는 런타임 번들 방식 미결정 | 개발 담당자 | Pilot 배포 전 |
+| 실제 익명화 프로젝트 Pilot 미실행 | PLC 담당자 | Pilot Gate |
+| GX Works2 결과와 앱 결과의 Golden Benchmark 미실행 | PLC 담당자 | Pilot Gate |
+| 운영 OS별 파일 권한·백업·삭제 정책 검토 미실행 | 보안 담당자 | Pilot Gate |
+
+## PLC-QA-002 Export 호환성 증거 (2026-08-03)
+
+- GX Works2 후보 CSV의 논리 문자열은 BOM 없이 CRLF와 표준 CSV escaping을
+  사용하고, 브라우저 다운로드 바이트 경계에서만 UTF-8 BOM을 한 번 붙인다.
+- 한글·영문·공백·괄호 파일명을 보존하면서 경로 구분자, 제어 문자,
+  Windows 금지 문자와 예약 파일명을 정규화한다.
+- 보고서 응답은 ASCII fallback과 RFC 5987 `filename*`를 함께 제공하고,
+  브라우저는 확장자를 강제한 뒤 다시 정규화한다.
+- 0건, 한글·쉼표·따옴표·개행, 20,000건 대용량, 경로 주입, 중복 실행,
+  생성/전달 실패 후 재시도 계약을 로컬 테스트로 고정한다.
+- 상단 엑셀 보고서는 기존 UTF-8 SpreadsheetML 계약을 유지하고 CSV BOM을
+  적용하지 않는다.
+
+| 잔여 위험 | 담당 | 완료 기한 |
+| --- | --- | --- |
+| 실제 Windows 10/11 및 설치형 Excel 열기·재저장 왕복 미검증 | Windows QA 담당자 | Pilot 전 |
+| 실제 GX Works2 CSV Import·프로그램 체크 미실행 | PLC 담당자 | Pilot 전 |
+| 브라우저별 실제 다운로드 위치·보안 정책 차이 미검증 | Windows QA 담당자 | Pilot 전 |

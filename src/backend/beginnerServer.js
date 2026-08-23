@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
 import { createServer as createHttpServer } from 'node:http';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createChangePlan } from './beginnerChangeAssistant.js';
 import { normalizeChangeRequirement } from './requirementNormalizer.js';
 import { createServer as createLegacyServer } from './server.js';
+import { createLocalWorkspaceStore } from '../application/localWorkspaceStore.js';
+import { createWorkspaceService } from '../application/workspaceService.js';
 import {
   assertJsonRequest,
   assertLoopbackHost,
@@ -169,7 +172,7 @@ function validateChangePlanPayload(body) {
   };
 }
 
-async function handleCreateChangePlan(req, res) {
+async function handleCreateChangePlan(req, res, workspaceService) {
   if (req.method !== 'POST') {
     sendError(res, 405, 'method_not_allowed', 'Method not allowed');
     return;
@@ -185,12 +188,21 @@ async function handleCreateChangePlan(req, res) {
     normalizationSource: normalization.source,
     fallbackReason: normalization.fallbackReason
   });
+  const snapshot = payload.analysis?.snapshot;
+  if (snapshot?.workspaceId && snapshot?.id) {
+    workspaceService.recordChangeProposal({
+      workspaceId: snapshot.workspaceId,
+      snapshotId: snapshot.id,
+      requestText: payload.requestText,
+      changePlan
+    });
+  }
 
   sendJson(res, 201, { data: changePlan });
 }
 
-export function createServer() {
-  const legacyServer = createLegacyServer();
+export function createServer({ workspaceService = createWorkspaceService() } = {}) {
+  const legacyServer = createLegacyServer({ workspaceService });
   const legacyHandler = legacyServer.listeners('request')[0];
 
   if (typeof legacyHandler !== 'function') {
@@ -207,7 +219,7 @@ export function createServer() {
     try {
       assertTrustedLocalMutation(req);
       assertJsonRequest(req);
-      await handleCreateChangePlan(req, res);
+      await handleCreateChangePlan(req, res, workspaceService);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Internal server error';
       const statusCode = Number.isInteger(error?.statusCode)
@@ -237,7 +249,13 @@ export function startServer({
   host = process.env.HOST || '127.0.0.1'
 } = {}) {
   const localHost = assertLoopbackHost(host);
-  const server = createServer();
+  const rootDirectory =
+    process.env.PLC_WORKSPACE_DIR || join(homedir(), '.plc-review-assistant');
+  const server = createServer({
+    workspaceService: createWorkspaceService({
+      persistenceStore: createLocalWorkspaceStore({ rootDirectory })
+    })
+  });
   server.listen(port, localHost, () => {
     console.log(`PLC Beginner Wizard running on http://${localHost}:${port}`);
   });

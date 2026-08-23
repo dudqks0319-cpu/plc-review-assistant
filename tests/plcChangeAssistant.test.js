@@ -286,6 +286,31 @@ test('createChangePlan builds file-less GX Works2 self-holding drafts without pr
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.candidate.lst'), false);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.candidate.diff'), false);
   assert.equal(changePlan.candidateFiles.some((file) => file.filename === 'draft.instruction-draft.txt'), true);
+  const csvFile = changePlan.candidateFiles.find((file) => file.filename === 'draft.review-list.csv');
+  assert.equal(csvFile.mimeType, 'text/csv; charset=utf-8');
+  assert.equal(csvFile.content.startsWith('\uFEFF'), false);
+  assert.equal(csvFile.content.includes('\r\n'), true);
+  assert.equal(csvFile.content.replaceAll('\r\n', '').includes('\n'), false);
+});
+
+test('candidate filenames preserve readable Unicode while removing path and Windows-forbidden characters', () => {
+  const changePlan = createChangePlan({
+    analysis: draftMitsubishiAnalysis(),
+    vendor: 'mitsubishi',
+    requestText: '자기유지회로 만들어줘. 시작 X0 정지 X1 출력 Y0',
+    sourceFilename: '../unsafe\\한글 English (검토):A?.txt'
+  });
+
+  assert.equal(
+    changePlan.candidateFiles.some(
+      (file) => file.filename === '한글 English (검토)-A.review-list.csv'
+    ),
+    true
+  );
+  assert.equal(
+    changePlan.candidateFiles.every((file) => !/[\\/:?*<>|]/.test(file.filename)),
+    true
+  );
 });
 
 test('createChangePlan restricts elevator drafts to simulation-only output', () => {

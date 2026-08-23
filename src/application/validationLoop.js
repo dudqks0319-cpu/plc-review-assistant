@@ -635,17 +635,23 @@ function summarize(validationRuns, riskClass) {
   const externalRuns = validationRuns.filter((run) =>
     ['V7', 'V8', 'V9', 'V10'].includes(run.level)
   );
+  const externalEvidenceComplete = externalRuns.every((run) =>
+    ['pass', 'not-applicable'].includes(run.status)
+  );
   const overallStatus =
     riskClass === 'R4' || validationRuns.some((run) => run.status === 'fail')
       ? 'fail'
-      : externalRuns.every((run) =>
-            ['pass', 'not-applicable'].includes(run.status)
-          )
-        ? 'pass'
+      : externalEvidenceComplete
+        ? 'recorded'
         : 'not-run';
   return {
     localStatus,
     overallStatus,
+    externalEvidenceStatus: externalEvidenceComplete
+      ? 'recorded-not-independently-verified'
+      : 'incomplete',
+    fieldBehaviorGuaranteed: false,
+    safetySystemSuccessClaimed: false,
     highestPassedLevel:
       [...validationRuns]
         .reverse()
@@ -730,8 +736,9 @@ export function runValidationLoop({
     policy: {
       canWriteToPlc: false,
       executesExternalProcess: false,
-      externalNetworkUsed: false
+      externalNetworkUsed: false,
+      fieldBehaviorGuaranteed: false,
+      safetySystemSuccessClaimed: false
     }
   };
 }
-

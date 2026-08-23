@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
+import { parseContentDispositionFilename } from '../public/exportContract.js';
 
 const { createServer } = await import('../src/backend/beginnerServer.js');
 
@@ -183,6 +184,165 @@ test('API v2 creates an in-memory workspace, imports a bundle, and exposes devic
     ),
     true
   );
+});
+
+test('API v2 lists workspaces and exposes a redacted local audit trail', async () => {
+  const workspaceResponse = await requestJson('/api/v2/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'audit review',
+      vendor: 'mitsubishi',
+      cpuProfileId: 'mitsubishi-fx3'
+    })
+  });
+  const workspaceId = workspaceResponse.body.data.id;
+  const imported = await requestJson(`/api/v2/workspaces/${workspaceId}/artifacts`, {
+    method: 'POST',
+    body: JSON.stringify({
+      artifacts: [
+        {
+          filename: 'audit-main.lst',
+          content: 'PROGRAM MAIN\nNETWORK 1\nLD X0\nOUT Y20\nEND'
+        }
+      ]
+    })
+  });
+  await requestJson(
+    `/api/v2/snapshots/${imported.body.data.snapshot.id}/questions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        question: 'Y20은 어디에서 켜지나요?',
+        mode: 'grounded'
+      })
+    }
+  );
+
+  const listed = await requestJson('/api/v2/workspaces');
+  const audit = await requestJson(`/api/v2/workspaces/${workspaceId}/audit`);
+
+  assert.equal(listed.response.status, 200);
+  assert.equal(
+    listed.body.data.some(
+      (workspace) =>
+        workspace.id === workspaceId &&
+        workspace.storage === 'memory-only' &&
+        workspace.storesOriginalArtifacts === false
+    ),
+    true
+  );
+  assert.equal(audit.response.status, 200);
+  assert.equal(
+    audit.body.data.some(
+      (event) =>
+        event.event === 'question.answered' &&
+        /^[a-f0-9]{64}$/.test(event.questionHash) &&
+        !Object.hasOwn(event, 'question')
+    ),
+    true
+  );
+
+  const changePlan = await requestJson('/api/v1/change-plans', {
+    method: 'POST',
+    body: JSON.stringify({
+      vendor: 'mitsubishi',
+      requestText: '상승 엣지 X0에서 Y20 one-shot 출력을 만들어줘',
+      analysis: {
+        snapshot: imported.body.data.snapshot,
+        project: {
+          id: imported.body.data.snapshot.id,
+          name: 'audit review',
+          vendor: 'mitsubishi',
+          source: {
+            filename: 'audit-main.lst',
+            fileType: 'mitsubishi-instruction-list'
+          },
+          blocks: [],
+          variables: [],
+          ioAddresses: [],
+          callGraph: [],
+          protectedItems: [],
+          parserWarnings: []
+        },
+        summary: imported.body.data.artifactResults[0].summary,
+        findings: imported.body.data.findings,
+        limitations: []
+      }
+    })
+  });
+  const proposals = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/proposals`
+  );
+  const validations = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/validations`
+  );
+
+  assert.equal(changePlan.response.status, 201);
+  assert.equal(proposals.response.status, 200);
+  assert.equal(proposals.body.data.length, 1);
+  assert.equal(proposals.body.data[0].snapshotId, imported.body.data.snapshot.id);
+  assert.equal(proposals.body.data[0].storesCandidateContent, false);
+  assert.equal(
+    proposals.body.data[0].candidateFiles.every(
+      (file) => !Object.hasOwn(file, 'content') && /^[a-f0-9]{64}$/.test(file.contentHash)
+    ),
+    true
+  );
+  assert.equal(validations.response.status, 200);
+  assert.equal(validations.body.data[0].summary.localStatus, 'pass');
+
+  const decision = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/proposals/${proposals.body.data[0].id}/decisions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        status: 'approved',
+        reviewerRole: 'plc-engineer',
+        note: '수동 GX Works 검토 대상으로 승인'
+      })
+    }
+  );
+  const invalidDecision = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/proposals/${proposals.body.data[0].id}/decisions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        status: 'trusted',
+        reviewerRole: 'administrator'
+      })
+    }
+  );
+  const validationsAfterDecision = await requestJson(
+    `/api/v2/workspaces/${workspaceId}/validations`
+  );
+
+  assert.equal(decision.response.status, 201);
+  assert.equal(decision.body.data.scope, 'manual-review-only');
+  assert.equal(decision.body.data.authorizationEffect, 'none');
+  assert.equal(decision.body.data.canWriteToPlc, false);
+  assert.match(decision.body.data.noteHash, /^[a-f0-9]{64}$/);
+  assert.equal(invalidDecision.response.status, 400);
+  assert.equal(invalidDecision.body.error.code, 'INVALID_DECISION_STATUS');
+  assert.equal(
+    validationsAfterDecision.body.data[0].validationRuns.find(
+      (run) => run.level === 'V9'
+    ).status,
+    'not-run'
+  );
+});
+
+test('API v2 fails closed when persistent storage is not configured', async () => {
+  const { response, body } = await requestJson('/api/v2/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'must persist',
+      vendor: 'mitsubishi',
+      storage: 'persistent'
+    })
+  });
+
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, 'PERSISTENCE_UNAVAILABLE');
 });
 
 test('API v2 answers grounded questions and cites CPU-filtered local knowledge', async () => {
@@ -382,7 +542,10 @@ test('POST /api/v1/reports returns markdown, excel, and pdf downloads', async ()
   });
   assert.equal(excel.status, 200);
   assert.equal(excel.headers.get('Content-Type').startsWith('application/vnd.ms-excel'), true);
-  const excelText = await excel.text();
+  const excelBytes = Buffer.from(await excel.arrayBuffer());
+  const excelText = excelBytes.toString('utf8');
+  assert.notDeepEqual(excelBytes.subarray(0, 3), Buffer.from([0xef, 0xbb, 0xbf]));
+  assert.equal(excelText.startsWith('<?xml version="1.0" encoding="UTF-8"?>'), true);
   assert.match(excelText, /<Workbook/);
   assert.match(excelText, /ChangePlan/);
 
@@ -395,6 +558,49 @@ test('POST /api/v1/reports returns markdown, excel, and pdf downloads', async ()
   assert.equal(pdf.headers.get('Content-Type'), 'application/pdf');
   const pdfBytes = Buffer.from(await pdf.arrayBuffer());
   assert.equal(pdfBytes.subarray(0, 5).toString('utf8'), '%PDF-');
+});
+
+test('POST /api/v1/reports completes a large local export with a stable filename', async () => {
+  const analysisResponse = await requestJson('/api/v1/analyses', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: 'large-review.xml',
+      vendor: 'siemens',
+      content: sampleXml
+    })
+  });
+  const analysis = analysisResponse.body.data;
+  analysis.project.name = '../대용량 검토 (A):결과?';
+  analysis.project.variables = Array.from({ length: 4_000 }, (_, index) => ({
+    name: `LargeVariable_${index}`,
+    kind: 'tag',
+    dataType: 'Bool',
+    address: `%M${index}.0`,
+    comment: `large fixture row ${index}`,
+    scope: 'global',
+    usageCount: index % 7
+  }));
+  analysis.summary.variableCount = analysis.project.variables.length;
+
+  const response = await fetch(`${baseUrl}/api/v1/reports`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ format: 'excel', analysis, changePlan: null })
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    parseContentDispositionFilename(response.headers.get('Content-Disposition'), {
+      extension: 'xls',
+      fallbackBase: 'plc-review'
+    }),
+    '대용량 검토 (A)-결과.xls'
+  );
+  assert.match(response.headers.get('Content-Disposition'), /filename\*=UTF-8''/);
+  const body = await response.text();
+  assert.match(body, /LargeVariable_3999/);
+  assert.match(body, /<\/Workbook>$/);
+  assert.equal(Buffer.byteLength(body, 'utf8') > 500_000, true);
 });
 
 test('POST /api/v1/codex/change-requirements falls back when Codex normalizer is disabled', async () => {
@@ -535,22 +741,37 @@ test('POST /api/v1/change-plans keeps local, GX Works, approval, and field valid
   );
 });
 
-test('POST /api/v1/change-plans rejects invalid manual validation records', async () => {
-  const { response, body } = await requestJson('/api/v1/change-plans', {
-    method: 'POST',
-    body: JSON.stringify({
-      vendor: 'mitsubishi',
-      requestText: '상승 엣지 X0에서 Y0 one-shot 출력을 만들어줘',
-      manualValidationRecords: [
-        {
-          level: 'V8',
-          status: 'trusted-without-check',
-          tool: 'GX Works2'
-        }
-      ]
-    })
-  });
+test('POST /api/v1/change-plans rejects invalid or unsupported manual pass claims', async () => {
+  const invalidRecords = [
+    {
+      level: 'V8',
+      status: 'trusted-without-check',
+      tool: 'GX Works2'
+    },
+    {
+      level: 'V8',
+      status: 'pass',
+      tool: 'GX Works2 without evidence'
+    },
+    {
+      level: 'V9',
+      status: 'pass',
+      tool: 'Approval without role',
+      evidenceIds: ['approval-api-001']
+    }
+  ];
 
-  assert.equal(response.status, 400);
-  assert.equal(body.error.code, 'invalid_validation_record');
+  for (const record of invalidRecords) {
+    const { response, body } = await requestJson('/api/v1/change-plans', {
+      method: 'POST',
+      body: JSON.stringify({
+        vendor: 'mitsubishi',
+        requestText: '상승 엣지 X0에서 Y0 one-shot 출력을 만들어줘',
+        manualValidationRecords: [record]
+      })
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error.code, 'invalid_validation_record');
+  }
 });

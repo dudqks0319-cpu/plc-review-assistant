@@ -3,6 +3,10 @@ import {
   includesSafetyKeyword,
   unsafeModificationRequested as deterministicUnsafeModificationRequested
 } from './safetyValidator.js';
+import {
+  normalizeDownloadBaseName,
+  serializeCsv
+} from '../../public/exportContract.js';
 
 const SAFETY_KEYWORDS = [
   'emergency',
@@ -112,14 +116,10 @@ function makeId(prefix, ...parts) {
 }
 
 function safeFilename(value, fallback = 'plc-program') {
-  const base = safeString(value, fallback, 160)
-    .split(/[\\/]/)
-    .pop()
-    .replace(/\.[^.]+$/, '')
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-  return base || fallback;
+  return normalizeDownloadBaseName(safeString(value, fallback, 160), {
+    fallbackBase: fallback,
+    maxLength: 120
+  });
 }
 
 function safeString(value, fallback = '', maxLength = 1000) {
@@ -518,10 +518,9 @@ function createMitsubishiPatch(requirement, targetOutput, startConditions, stopC
     {
       name: 'Ladder CSV patch candidate',
       language: 'CSV',
-      content: listing
-        .split('\n')
-        .map((line, index) => `${index + 1},"${line.replaceAll('"', '""')}"`)
-        .join('\n')
+      content: serializeCsv(
+        listing.split('\n').map((line, index) => [index + 1, line])
+      )
     }
   ];
 }
@@ -531,7 +530,7 @@ function withEndInstruction(lines) {
 }
 
 function createGxWorks2CsvRows(lines) {
-  return lines.map((line, index) => `${index + 1},"${line.replaceAll('"', '""')}"`).join('\n');
+  return serializeCsv(lines.map((line, index) => [index + 1, line]));
 }
 
 function makeIoMap(entries) {
@@ -1208,7 +1207,7 @@ function createCandidateFiles({
       id: makeId('file', baseName, vendor, 'patch'),
       filename: `${baseName}.${patchFileExtension}`,
       label: vendor === 'siemens' ? 'SCL 패치 후보' : 'Ladder CSV 패치 후보',
-      mimeType: 'text/plain; charset=utf-8',
+      mimeType: vendor === 'siemens' ? 'text/plain; charset=utf-8' : 'text/csv; charset=utf-8',
       content: vendor === 'siemens' ? primaryPatch : secondaryPatch || primaryPatch
     },
     {

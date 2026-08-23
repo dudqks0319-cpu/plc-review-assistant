@@ -143,6 +143,15 @@
               <small>CPU가 불명확하면 주소 진법과 타이머 시간값을 추정하지 않습니다.</small>
             </div>
             <button id="clear-file" class="text-button hidden" type="button">선택한 파일 모두 빼기</button>
+            <label class="workspace-storage-option" for="persist-workspace">
+              <input id="persist-workspace" type="checkbox" disabled />
+              <span>
+                <strong>분석 결과를 이 컴퓨터에 저장</strong>
+                <small>
+                  원본 파일 내용과 질문 문장은 저장하지 않고 Snapshot·해시·검증 기록만 저장합니다.
+                </small>
+              </span>
+            </label>
             <div id="mode-hint" class="mode-hint" role="status"></div>
           </section>
 
@@ -171,6 +180,20 @@
             <button class="report-button" type="button" data-report="excel" disabled>엑셀</button>
             <button class="report-button" type="button" data-report="pdf" disabled>PDF</button>
           </div>
+        </div>
+        <div
+          id="export-feedback"
+          class="export-feedback hidden"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-state="idle"
+        >
+          <div>
+            <strong id="export-status-title"></strong>
+            <p id="export-status-detail"></p>
+          </div>
+          <button id="export-retry" class="report-button hidden" type="button">다시 시도</button>
         </div>
 
         <div id="empty-state" class="empty-state">

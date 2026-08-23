@@ -6,6 +6,11 @@ const VALIDATION_STATUSES = new Set([
   'not-run',
   'not-applicable'
 ]);
+const APPROVAL_REVIEWER_ROLES = new Set([
+  'plc-engineer',
+  'safety-engineer',
+  'site-owner'
+]);
 
 function validationError(message) {
   const error = new Error(message);
@@ -48,6 +53,7 @@ export function createManualValidationRecord({
   toolVersion = '',
   diagnostics = [],
   evidenceIds = [],
+  reviewerRole = '',
   startedAt,
   finishedAt
 }) {
@@ -57,6 +63,9 @@ export function createManualValidationRecord({
   if (!VALIDATION_STATUSES.has(status)) {
     throw validationError('Manual validation status is invalid.');
   }
+  if (level !== 'V7' && status === 'not-applicable') {
+    throw validationError('V8, V9, and V10 cannot be marked not-applicable.');
+  }
 
   const fallbackTime = new Date().toISOString();
   const normalizedStartedAt = isoTimestamp(startedAt, fallbackTime);
@@ -64,6 +73,29 @@ export function createManualValidationRecord({
   const normalizedTool = boundedText(tool, '', 120);
   if (!normalizedTool) {
     throw validationError('Manual validation tool is required.');
+  }
+  const normalizedEvidenceIds = [
+    ...new Set(
+      (Array.isArray(evidenceIds) ? evidenceIds : [])
+        .slice(0, 64)
+        .map((value) => boundedText(value, '', 160))
+        .filter(Boolean)
+    )
+  ];
+  const normalizedReviewerRole = boundedText(reviewerRole, '', 80);
+  if (status === 'pass' && normalizedEvidenceIds.length === 0) {
+    throw validationError('A manual pass record requires at least one evidence ID.');
+  }
+  if (
+    normalizedReviewerRole &&
+    !APPROVAL_REVIEWER_ROLES.has(normalizedReviewerRole)
+  ) {
+    throw validationError(
+      'Reviewer role must be plc-engineer, safety-engineer, or site-owner.'
+    );
+  }
+  if (level === 'V9' && status === 'pass' && !normalizedReviewerRole) {
+    throw validationError('A V9 pass record requires a reviewer role.');
   }
 
   return {
@@ -74,15 +106,12 @@ export function createManualValidationRecord({
     startedAt: normalizedStartedAt,
     finishedAt: normalizedFinishedAt,
     diagnostics: normalizeDiagnostics(diagnostics),
-    evidenceIds: [
-      ...new Set(
-        (Array.isArray(evidenceIds) ? evidenceIds : [])
-          .slice(0, 64)
-          .map((value) => boundedText(value, '', 160))
-          .filter(Boolean)
-      )
-    ],
-    source: 'manual-record'
+    evidenceIds: normalizedEvidenceIds,
+    reviewerRole: normalizedReviewerRole || undefined,
+    source: 'manual-record',
+    claimScope: 'external-result-record-only',
+    qualificationVerified: false,
+    fieldBehaviorGuaranteed: false
   };
 }
 

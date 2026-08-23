@@ -1,3 +1,9 @@
+import { createExportWorkflow } from './exportWorkflow.js';
+import {
+  createDownloadArtifact,
+  parseContentDispositionFilename
+} from './exportContract.js';
+
 const elements = {
   form: document.getElementById('analysis-form'),
   fileInput: document.getElementById('project-file'),
@@ -7,6 +13,7 @@ const elements = {
   clearFile: document.getElementById('clear-file'),
   cpuProfile: document.getElementById('cpu-profile'),
   fileEncoding: document.getElementById('file-encoding'),
+  persistWorkspace: document.getElementById('persist-workspace'),
   mitsubishiImportOptions: document.getElementById('mitsubishi-import-options'),
   changeButton: document.getElementById('change-button'),
   changeRequest: document.getElementById('change-request'),
@@ -35,6 +42,10 @@ const elements = {
     limits: document.getElementById('tab-limits')
   },
   reportButtons: [...document.querySelectorAll('[data-report]')],
+  exportFeedback: document.getElementById('export-feedback'),
+  exportStatusTitle: document.getElementById('export-status-title'),
+  exportStatusDetail: document.getElementById('export-status-detail'),
+  exportRetry: document.getElementById('export-retry'),
   exampleButtons: [...document.querySelectorAll('[data-example]')],
   questionForm: document.getElementById('question-form'),
   questionInput: document.getElementById('question-input'),
@@ -70,6 +81,7 @@ let currentArtifactTexts = new Map();
 let busy = false;
 let questionBusy = false;
 let knowledgeBusy = false;
+let failedExportFormat = null;
 
 function createElement(tag, className, text) {
   const element = document.createElement(tag);
@@ -85,6 +97,69 @@ function createElement(tag, className, text) {
 function setMessage(text, tone = 'neutral') {
   elements.message.textContent = text;
   elements.message.dataset.tone = tone;
+}
+
+const REPORT_LABELS = {
+  markdown: '요약',
+  excel: '엑셀',
+  pdf: 'PDF'
+};
+
+function updateReportButtons() {
+  const exportRunning = exportWorkflow?.isRunning() || false;
+  elements.reportButtons.forEach((button) => {
+    button.disabled = !currentAnalysis || exportRunning;
+  });
+}
+
+function resetExportFeedback() {
+  failedExportFormat = null;
+  elements.exportFeedback.classList.add('hidden');
+  elements.exportFeedback.dataset.state = 'idle';
+  elements.exportFeedback.setAttribute('role', 'status');
+  elements.exportRetry.classList.add('hidden');
+  elements.reportButtons.forEach((button) => {
+    button.removeAttribute('aria-busy');
+    button.textContent = REPORT_LABELS[button.dataset.report] || '보고서';
+  });
+}
+
+function renderExportState(exportState) {
+  const label = REPORT_LABELS[exportState.format] || '보고서';
+  elements.exportFeedback.classList.remove('hidden');
+  elements.exportFeedback.dataset.state = exportState.state;
+  elements.exportFeedback.setAttribute(
+    'role',
+    exportState.state === 'failed' ? 'alert' : 'status'
+  );
+  elements.exportRetry.classList.toggle('hidden', exportState.state !== 'failed');
+
+  elements.reportButtons.forEach((button) => {
+    const isActive =
+      exportState.state === 'running' && button.dataset.report === exportState.format;
+    button.toggleAttribute('aria-busy', isActive);
+    button.textContent = isActive
+      ? `${REPORT_LABELS[button.dataset.report]} 생성 중…`
+      : REPORT_LABELS[button.dataset.report] || '보고서';
+  });
+
+  if (exportState.state === 'running') {
+    failedExportFormat = null;
+    elements.exportStatusTitle.textContent = `${label} 보고서 생성 중`;
+    elements.exportStatusDetail.textContent =
+      '검토 결과를 파일로 만드는 중입니다. 완료되기 전에는 다운로드 완료로 표시하지 않습니다.';
+  } else if (exportState.state === 'complete') {
+    failedExportFormat = null;
+    elements.exportStatusTitle.textContent = '내보내기 완료';
+    elements.exportStatusDetail.textContent =
+      `${exportState.filename} · ${exportState.location}로 전달 완료 · ${formatBytes(exportState.sizeBytes)}`;
+  } else {
+    failedExportFormat = exportState.format;
+    elements.exportStatusTitle.textContent = `${label} 내보내기 실패`;
+    elements.exportStatusDetail.textContent = `${exportState.message} 아래 “다시 시도”를 눌러 재시도할 수 있습니다.`;
+  }
+
+  updateReportButtons();
 }
 
 function selectedAssistantVendor() {
@@ -170,10 +245,17 @@ function createDraftAnalysis(vendor, requestText) {
 }
 
 function updateModeHint() {
+  const canPersist =
+    selectedFiles.length > 0 && selectedAssistantVendor() === 'mitsubishi';
+  elements.persistWorkspace.disabled = !canPersist;
+  if (!canPersist) {
+    elements.persistWorkspace.checked = false;
+  }
+
   if (selectedFiles.length) {
     elements.modeHint.dataset.mode = 'file';
     elements.modeHint.textContent =
-      `기존 파일 검토 모드 · ${selectedFiles.length}개 export를 하나의 읽기 전용 스냅샷으로 묶어 검토합니다.`;
+      `기존 파일 검토 모드 · ${selectedFiles.length}개 export를 하나의 읽기 전용 스냅샷으로 묶어 검토합니다.${elements.persistWorkspace.checked ? ' 재시작 후 복원할 로컬 작업공간으로 저장합니다.' : ' 앱 종료 시 사라지는 임시 작업공간입니다.'}`;
     return;
   }
 
@@ -202,9 +284,8 @@ function resetResults() {
   currentArtifactTexts = new Map();
   elements.analysisView.classList.add('hidden');
   elements.emptyState.classList.remove('hidden');
-  elements.reportButtons.forEach((button) => {
-    button.disabled = true;
-  });
+  resetExportFeedback();
+  updateReportButtons();
   elements.questionAnswer.replaceChildren(
     createElement(
       'p',
@@ -433,6 +514,7 @@ function validationStatusLabel(status) {
     pass: '통과',
     fail: '실패',
     warning: '경고',
+    recorded: '외부 기록됨',
     'not-run': '미실행',
     'not-applicable': '해당 없음'
   }[status] || '확인 필요';
@@ -452,8 +534,8 @@ function renderValidationLoop(validationLoop) {
         ? '로컬 V0~V6 검증은 통과했습니다. GX Works 프로그램 체크, 엔지니어 승인, 현장 검증은 아직 미실행입니다.'
         : localStatus === 'fail'
           ? '로컬 검증에 실패했습니다. 아래 실패 이유를 해결하기 전에는 후보를 사용하지 마세요.'
-          : overallStatus === 'pass'
-            ? '기록된 V0~V10 검증 단계가 모두 통과 또는 해당 없음 상태입니다.'
+          : overallStatus === 'recorded'
+            ? '외부 검증·승인 결과가 기록되었지만 앱이 자격, 현장 동작 또는 안전 성공을 독립 검증한 것은 아닙니다.'
             : '검증이 아직 실행되지 않았거나 추가 확인이 필요합니다.'
     )
   );
@@ -462,7 +544,7 @@ function renderValidationLoop(validationLoop) {
   [
     ['로컬 V0~V6', validationStatusLabel(localStatus)],
     ['전체 V0~V10', validationStatusLabel(overallStatus)],
-    ['최고 통과 단계', summary.highestPassedLevel || '없음'],
+    ['최고 기록 단계', summary.highestPassedLevel || '없음'],
     ['자동 보정', `${validationLoop?.repairs?.length || 0}건`]
   ].forEach(([label, value]) => {
     const item = createElement('div');
@@ -571,14 +653,21 @@ function renderValidationLoop(validationLoop) {
 }
 
 function downloadGeneratedFile(file) {
-  const blob = new Blob([file.content], { type: file.mimeType || 'text/plain; charset=utf-8' });
+  const artifact = createDownloadArtifact(file);
+  const blob = new Blob([artifact.bytes], { type: artifact.mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url;
-  link.download = file.filename || 'plc-change-candidate.txt';
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-  setMessage(`${link.download} 다운로드를 시작했습니다.`, 'success');
+  try {
+    link.href = url;
+    link.download = artifact.filename;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  }
+  setMessage(`${artifact.filename} 다운로드를 시작했습니다.`, 'success');
 }
 
 function renderChangePlan(changePlan) {
@@ -793,9 +882,8 @@ function renderAnalysis(analysis, changePlan = null) {
   renderVariables(analysis.project || {});
   renderLimits(analysis.limitations || [], changePlan?.warnings || []);
   renderChangePlan(changePlan);
-  elements.reportButtons.forEach((button) => {
-    button.disabled = false;
-  });
+  resetExportFeedback();
+  updateReportButtons();
   updateQuestionAvailability();
   if (currentWorkspaceId) {
     refreshKnowledgeDocuments();
@@ -1371,7 +1459,8 @@ async function analyzeSelectedFiles(vendor) {
     body: JSON.stringify({
       name: sourceFile.name.replace(/\.[^.]+$/, '') || 'Mitsubishi review',
       vendor,
-      cpuProfileId: selectedCpuProfile()
+      cpuProfileId: selectedCpuProfile(),
+      storage: elements.persistWorkspace.checked ? 'persistent' : 'memory-only'
     })
   });
   currentWorkspaceId = workspaceResponse.data.id;
@@ -1458,38 +1547,58 @@ async function createChangePlan(event) {
   }
 }
 
-async function downloadReport(format) {
-  if (!currentAnalysis) {
-    return;
+function getReportFilename(response, format) {
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const extension = format === 'markdown' ? 'md' : format === 'excel' ? 'xls' : 'pdf';
+  return parseContentDispositionFilename(disposition, {
+    extension,
+    fallbackBase: 'plc-review'
+  });
+}
+
+async function createReportArtifact(format) {
+  const response = await fetch('/api/v1/reports', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ format, analysis: currentAnalysis, changePlan: currentChangePlan })
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data?.error?.message || '보고서 생성에 실패했습니다.');
   }
 
+  return {
+    blob: await response.blob(),
+    filename: getReportFilename(response, format),
+    location: '브라우저 다운로드 위치'
+  };
+}
+
+function deliverReportArtifact(artifact) {
+  const url = URL.createObjectURL(artifact.blob);
+  const link = document.createElement('a');
   try {
-    const response = await fetch('/api/v1/reports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ format, analysis: currentAnalysis, changePlan: currentChangePlan })
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data?.error?.message || '보고서 생성에 실패했습니다.');
-    }
-
-    const blob = await response.blob();
-    const disposition = response.headers.get('Content-Disposition') || '';
-    const filenameMatch = disposition.match(/filename="([^"]+)"/);
-    const extension = format === 'markdown' ? 'md' : format === 'excel' ? 'xls' : 'pdf';
-    const filename = filenameMatch?.[1] || `plc-review.${extension}`;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
     link.href = url;
-    link.download = filename;
+    link.download = artifact.filename;
+    link.hidden = true;
+    document.body.append(link);
     link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-    setMessage(`${filename} 다운로드를 시작했습니다.`, 'success');
-  } catch (error) {
-    setMessage(error instanceof Error ? error.message : '보고서 다운로드에 실패했습니다.', 'error');
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
+}
+
+const exportWorkflow = createExportWorkflow({
+  createArtifact: createReportArtifact,
+  deliverArtifact: deliverReportArtifact,
+  onStateChange: renderExportState
+});
+
+async function downloadReport(format) {
+  if (!currentAnalysis) return;
+  await exportWorkflow.run(format);
 }
 
 function activateTab(tabName) {
@@ -1559,6 +1668,15 @@ elements.clearFile.addEventListener('click', () => {
 elements.changeRequest.addEventListener('input', updatePrimaryState);
 elements.questionInput.addEventListener('input', updateQuestionAvailability);
 elements.safetyAck.addEventListener('change', updatePrimaryState);
+elements.persistWorkspace.addEventListener('change', () => {
+  resetResults();
+  updateModeHint();
+  setMessage(
+    elements.persistWorkspace.checked
+      ? '분석 결과를 이 컴퓨터에 저장합니다. 원본 파일 내용은 저장하지 않습니다.'
+      : '이번 분석은 앱 종료 시 사라지는 임시 작업공간으로 사용합니다.'
+  );
+});
 elements.cpuProfile.addEventListener('change', () => {
   resetResults();
   setMessage('CPU 계열을 바꿨습니다. 다시 분석하면 새 기준이 적용됩니다.');
@@ -1597,6 +1715,11 @@ document.querySelectorAll('input[name="assistant-version"]').forEach((input) => 
 elements.tabs.forEach((tab) => tab.addEventListener('click', () => activateTab(tab.dataset.tab)));
 elements.reportButtons.forEach((button) => {
   button.addEventListener('click', () => downloadReport(button.dataset.report));
+});
+elements.exportRetry.addEventListener('click', () => {
+  if (failedExportFormat) {
+    downloadReport(failedExportFormat);
+  }
 });
 
 updateModeHint();

@@ -8,3 +8,4 @@ dist/
 .playwright-mcp/
 .omx/
 npm-debug.log*
+.plc-review-assistant/

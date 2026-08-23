@@ -71,7 +71,15 @@ Explicitly out of scope:
 - Records bounded manual GX Works2/approval/field evidence without executing an external process or writing to a PLC
 - Applies only a bounded, semantics-preserving missing `END` repair; unsupported instructions and safety failures remain failed
 - Generates a downloadable Validation Matrix and simulator Trend JSON beside the review report
+- Offers explicit opt-in persistent local workspaces; temporary workspaces remain memory-only
+- Restores normalized snapshots, proposal lineage, validation records, and minimized audit events after restart
+- Stores candidate and question hashes instead of candidate content or question text
+- Deletes the complete workspace directory, including snapshots, proposals, validations, reports, indexes, and audit
+- Records local approval/rejection as manual-review evidence only; it never grants PLC write authority or marks V9/V10 passed
 - Downloads Markdown, Excel-compatible XML, and PDF reports
+- Downloads GX Works2 review CSV candidates as UTF-8 with BOM and CRLF for
+  Windows Excel compatibility; the Excel-compatible XML report remains UTF-8
+  SpreadsheetML and does not use a CSV BOM
 
 ## Run
 
@@ -87,6 +95,9 @@ npm run start:codex
 ```
 
 Windows에서는 `start-windows.bat`를 더블 클릭할 수 있습니다. 자세한 내용은 [WINDOWS.md](./WINDOWS.md)를 참고하세요.
+
+macOS에서는 `start-macos.command`를 더블 클릭할 수 있습니다. 자세한
+내용은 [MACOS.md](./MACOS.md)를 참고하세요.
 
 Open:
 
@@ -191,6 +202,22 @@ Knowledge endpoints:
 - `GET /api/v2/workspaces/{workspaceId}/knowledge-documents`
 - `POST /api/v2/workspaces/{workspaceId}/knowledge-documents`
 - `DELETE /api/v2/workspaces/{workspaceId}/knowledge-documents/{documentId}`
+
+Local workspace and audit endpoints:
+
+- `GET /api/v2/workspaces`
+- `GET /api/v2/workspaces/{workspaceId}`
+- `DELETE /api/v2/workspaces/{workspaceId}`
+- `GET /api/v2/workspaces/{workspaceId}/audit`
+- `GET /api/v2/workspaces/{workspaceId}/proposals`
+- `GET /api/v2/workspaces/{workspaceId}/validations`
+- `POST /api/v2/workspaces/{workspaceId}/proposals/{proposalId}/decisions`
+
+Create a persistent workspace by setting `"storage": "persistent"` when
+creating it. Persistence is opt-in. The default remains `"memory-only"`.
+Original artifact content, question text, review notes, and candidate file
+content are not persisted. The default local root is
+`~/.plc-review-assistant`, configurable with `PLC_WORKSPACE_DIR`.
 
 Only `.txt` and `.md` documents are accepted. A document is limited to 1 MB;
 each workspace is limited to 16 documents and 8 MB. The current implementation

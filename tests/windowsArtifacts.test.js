@@ -6,12 +6,24 @@ function readProjectFile(path) {
   return readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
-test('Windows launcher starts the Codex-enabled local server', () => {
+test('Windows launcher defaults to loopback-only deterministic offline mode', () => {
   const launcher = readProjectFile('../start-windows.bat');
 
   assert.match(launcher, /where node/);
+  assert.match(launcher, /npm start/);
   assert.match(launcher, /npm run start:codex/);
-  assert.match(launcher, /http:\/\/localhost:4173/);
+  assert.match(launcher, /PLC_USE_CODEX/);
+  assert.match(launcher, /http:\/\/127\.0\.0\.1:4173/);
+});
+
+test('macOS launcher defaults to loopback-only deterministic offline mode', () => {
+  const launcher = readProjectFile('../start-macos.command');
+
+  assert.match(launcher, /command -v node/);
+  assert.match(launcher, /npm start/);
+  assert.match(launcher, /npm run start:codex/);
+  assert.match(launcher, /PLC_USE_CODEX/);
+  assert.match(launcher, /http:\/\/127\.0\.0\.1:4173/);
 });
 
 test('Codex startup uses supported normalization defaults', () => {

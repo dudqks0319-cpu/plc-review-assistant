@@ -1,5 +1,6 @@
 import { createServer as createHttpServer } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -13,11 +14,16 @@ import { createChangePlan, VENDOR_PROFILES } from './plcChangeAssistant.js';
 import { normalizeChangeRequirement } from './requirementNormalizer.js';
 import { handleApiV2Request } from './apiV2.js';
 import { createWorkspaceService } from '../application/workspaceService.js';
+import { createLocalWorkspaceStore } from '../application/localWorkspaceStore.js';
 import {
   assertJsonRequest,
   assertLoopbackHost,
   assertTrustedLocalMutation
 } from './localRequestGuard.js';
+import {
+  createAttachmentContentDisposition,
+  normalizeDownloadBaseName
+} from '../../public/exportContract.js';
 
 const PUBLIC_DIR = join(process.cwd(), 'public');
 const MAX_JSON_BYTES = 6_000_000;
@@ -75,7 +81,7 @@ function sendText(res, statusCode, body, contentType, filename) {
   };
 
   if (filename) {
-    headers['Content-Disposition'] = `attachment; filename="${filename}"`;
+    headers['Content-Disposition'] = createAttachmentContentDisposition(filename);
   }
 
   writeSecurityHeaders(res, headers);
@@ -305,7 +311,10 @@ async function handleCreateReport(req, res) {
 
   const body = await parseJsonBody(req);
   const { analysis, changePlan, format } = validateReportPayload(body);
-  const baseName = String(analysis?.project?.name || 'plc-review').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 80);
+  const baseName = normalizeDownloadBaseName(analysis?.project?.name, {
+    fallbackBase: 'plc-review',
+    maxLength: 80
+  });
 
   if (format === 'markdown') {
     sendText(res, 200, createMarkdownReport(analysis, changePlan), 'text/markdown; charset=utf-8', `${baseName}.md`);
@@ -326,7 +335,7 @@ async function handleCreateReport(req, res) {
   sendText(res, 200, createPdfReport(analysis, changePlan), 'application/pdf', `${baseName}.pdf`);
 }
 
-async function handleCreateChangePlan(req, res) {
+async function handleCreateChangePlan(req, res, workspaceService) {
   if (req.method !== 'POST') {
     methodNotAllowed(res);
     return;
@@ -342,6 +351,15 @@ async function handleCreateChangePlan(req, res) {
     normalizationSource: normalization.source,
     fallbackReason: normalization.fallbackReason
   });
+  const snapshot = payload.analysis?.snapshot;
+  if (snapshot?.workspaceId && snapshot?.id) {
+    workspaceService.recordChangeProposal({
+      workspaceId: snapshot.workspaceId,
+      snapshotId: snapshot.id,
+      requestText: payload.requestText,
+      changePlan
+    });
+  }
 
   sendJson(res, 201, { data: changePlan });
 }
@@ -434,7 +452,7 @@ export function createServer({ workspaceService = createWorkspaceService() } = {
       }
 
       if (url.pathname === '/api/v1/change-plans') {
-        await handleCreateChangePlan(req, res);
+        await handleCreateChangePlan(req, res, workspaceService);
         return;
       }
 
@@ -486,9 +504,19 @@ export function createServer({ workspaceService = createWorkspaceService() } = {
   });
 }
 
+function createPersistentWorkspaceService() {
+  const rootDirectory =
+    process.env.PLC_WORKSPACE_DIR || join(homedir(), '.plc-review-assistant');
+  return createWorkspaceService({
+    persistenceStore: createLocalWorkspaceStore({ rootDirectory })
+  });
+}
+
 export function startServer({ port = Number(process.env.PORT || 4173), host = process.env.HOST || '127.0.0.1' } = {}) {
   const localHost = assertLoopbackHost(host);
-  const server = createServer();
+  const server = createServer({
+    workspaceService: createPersistentWorkspaceService()
+  });
   server.listen(port, localHost, () => {
     console.log(`PLC Review Assistant running on http://${localHost}:${port}`);
   });
